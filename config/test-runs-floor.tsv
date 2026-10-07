@@ -1,0 +1,19 @@
+# Executed-test floors, one row per test file: `<file> <min-count>`.
+# Managed by scripts/check-test-runs.py --update.
+#
+# Per file, not per suite total: a total would let one file's growth mask
+# another's disappearance, and database.test.ts is the one that must not
+# disappear — it is the only file that talks to a database.
+#
+# Raise in the same commit that adds tests. Lowering is allowed only when
+# tests are genuinely deleted, and the commit should say which.
+
+tests/architecture.test.ts	33
+tests/database.test.ts	30
+tests/format.test.ts	10
+tests/money.test.ts	12
+tests/params.test.ts	11
+tests/query-building.test.ts	15
+tests/seed-data.test.ts	10
+tests/server-rendering.test.ts	3
+tests/slug.test.ts	14

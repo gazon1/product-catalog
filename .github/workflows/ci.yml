@@ -66,6 +66,16 @@ jobs:
       - name: Unit, architecture and database tests
         run: npm test
 
+      # `npm test` exits 0 whether 138 tests ran or one file was silently
+      # excluded by a broken pattern — and the file that needs a container is
+      # the first one such a pattern drops. This reads the JUnit XML the run
+      # above wrote, so it must come after it, never before.
+      #
+      # Floors are per file, not per total: a single total lets the other 108
+      # tests mask the disappearance of the 30 that talk to Postgres.
+      - name: Every recorded test file actually ran
+        run: python3 scripts/check-test-runs.py
+
   build-and-push:
     runs-on: ubuntu-latest
     timeout-minutes: 25

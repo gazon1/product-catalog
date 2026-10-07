@@ -66,6 +66,10 @@ typecheck:
 test:
     npx vitest run
 
+[doc('Fail when a test file did not execute (reads the JUnit XML npm test wrote)')]
+test-runs:
+    python3 scripts/check-test-runs.py
+
 [doc('Production build')]
 build:
     npm run build
@@ -73,9 +77,10 @@ build:
 # Runs the gates that CI runs, so a green local run means a green pipeline.
 # Ordered as CI orders them, not merely by cost: `schema-check` must precede
 # `test`, because the tests apply dev/db/ as their schema and a run against a
-# stale copy proves nothing. `build` stays last — it is the expensive one.
-[doc('Everything CI runs: typecheck, schema sync, tests, build (needs Docker)')]
-check: typecheck schema-check test build
+# stale copy proves nothing. `test-runs` must follow `test`, because it reads
+# the XML that run wrote. `build` stays last — it is the expensive one.
+[doc('Everything CI runs: typecheck, schema sync, tests, test-runs, build (needs Docker)')]
+check: typecheck schema-check test test-runs build
     @echo ""
     @echo "✅ all checks passed"
 
