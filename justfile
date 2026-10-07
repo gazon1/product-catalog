@@ -62,7 +62,7 @@ schema-check:
 typecheck:
     npx tsc --noEmit
 
-[doc('Run the unit and architecture tests')]
+[doc('Run the unit, architecture and database tests (requires a working Docker daemon)')]
 test:
     npx vitest run
 
@@ -71,8 +71,10 @@ build:
     npm run build
 
 # Runs the gates that CI runs, so a green local run means a green pipeline.
-# Ordered by cost: the cheap ones fail first and save a build.
-[doc('Everything CI runs: typecheck, tests, schema sync, build')]
+# Ordered as CI orders them, not merely by cost: `schema-check` must precede
+# `test`, because the tests apply dev/db/ as their schema and a run against a
+# stale copy proves nothing. `build` stays last — it is the expensive one.
+[doc('Everything CI runs: typecheck, schema sync, tests, build (needs Docker)')]
 check: typecheck schema-check test build
     @echo ""
     @echo "✅ all checks passed"

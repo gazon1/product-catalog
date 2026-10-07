@@ -17,7 +17,9 @@ jobs:
   # fail in seconds instead.
   typecheck-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Generous enough for a cold postgres:16-alpine pull plus the suite. The
+    # previous 15 was sized when `npm test` opened no sockets at all.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
@@ -31,9 +33,10 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit and architecture tests
-        run: npm test
-
+      # Runs BEFORE the tests, not after. The tests apply dev/db/ as their
+      # schema, so letting them run against a stale copy first would mean a
+      # green test run proving nothing and only the later gate noticing.
+      #
       # The crawler's migrations are the source of truth for the dev schema.
       # When it is absent the check fails loudly rather than skipping — a gate
       # that reports success having verified nothing is the failure mode this
@@ -44,6 +47,24 @@ jobs:
         run: bash scripts/check-dev-schema-sync.sh "$CRAWLER_REPO"
         env:
           CRAWLER_REPO: ${{ vars.CRAWLER_REPO || '../wb-parser-kotlin-new' }}
+
+      # `npm test` needs a working Docker daemon: tests/database.test.ts starts a
+      # postgres:16-alpine container, applies the crawler migrations above and
+      # runs the real listItems / getProduct / listTopDeals against them. This is
+      # the check that notices a crawler migration breaking the storefront's
+      # queries — nothing else in either repository would.
+      #
+      # Docker missing is a hard failure, never a skip. `ubuntu-latest` provides
+      # it; a self-hosted runner without it must fail and say so rather than
+      # report a passing suite while the tests that touch Postgres never ran.
+      #
+      # Pulling the image here rather than letting testcontainers do it keeps the
+      # timeout spent on the pull out of the test run itself.
+      - name: Pull the test database image
+        run: docker pull postgres:16-alpine
+
+      - name: Unit, architecture and database tests
+        run: npm test
 
   build-and-push:
     runs-on: ubuntu-latest

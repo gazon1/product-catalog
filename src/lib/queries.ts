@@ -95,6 +95,15 @@ function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
+/**
+ * Canonical UUID shape, as PostgreSQL's `uuid` type accepts it.
+ *
+ * Case-insensitive and hyphen-optional, because both are valid input for the
+ * type and a visitor who pastes an upper-case id should not get a 404.
+ */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // ---------------------------------------------------------------------------
 // Sorting
 // ---------------------------------------------------------------------------
@@ -384,8 +393,18 @@ export async function listTargets(): Promise<TargetSummary[]> {
  * single price observation and the history of a product is the set of its rows.
  * Rows whose `product_id` is null cannot be grouped this way and get no history
  * — the product page renders the price it has rather than pretending to a series.
+ *
+ * ## The id is validated before it reaches the database
+ *
+ * `id` comes straight from `/product/[id]`. PostgreSQL rejects a non-UUID string
+ * in a `uuid` comparison with error 22P02 rather than returning no rows, so an
+ * unvalidated id turns a typo in a URL into a database error page instead of a
+ * 404. Checking the shape costs a regex and turns the whole class of malformed
+ * URLs into "not found", which is what they are.
  */
 export async function getProduct(id: string): Promise<ProductDetail | null> {
+  if (!UUID_RE.test(id)) return null;
+
   const card = await queryOne<CardRow>(
     `SELECT ${CARD_COLUMNS}
        FROM scraped_items i
@@ -436,6 +455,24 @@ export async function getProduct(id: string): Promise<ProductDetail | null> {
  * with a null `match_id` are excluded: without a stable grouping key the
  * "best deal" list would deduplicate arbitrarily and show the same product twice,
  * which is worse than showing it once per target.
+ *
+ * ## Why this is wrapped in a subquery
+ *
+ * `DISTINCT ON (x)` requires `ORDER BY x` first, so the result comes back grouped
+ * by `match_id` — *not* by cashback. A page titled "Топ по кэшбэку" that returns
+ * its rows in `match_id` order is not a top list, it is a shuffled one. The
+ * outer query re-sorts by cashback descending, with `scraped_at` and `id` as
+ * tiebreakers so pagination below is stable.
+ *
+ * That wrapper is also what makes the filter usable: the inner query orders and
+ * deduplicates, the outer orders for presentation, and neither can starve the
+ * other.
+ *
+ * The outer query projects `best.*` rather than re-listing CARD_COLUMNS. A typed
+ * second copy of the projection is a second place to forget a column: adding one
+ * to CARD_COLUMNS would make `listItems` return it and `listTopDeals` silently
+ * drop it, and no test in this repository would fail on that. The subquery
+ * already exposes exactly the card projection, so the outer query forwards it.
  */
 export async function listTopDeals(options: {
   minCashbackPercent?: number | undefined;
@@ -446,18 +483,26 @@ export async function listTopDeals(options: {
   let filterSql = '';
   if (options.minCashbackPercent !== undefined && Number.isFinite(options.minCashbackPercent)) {
     params.push(options.minCashbackPercent);
-    filterSql = `AND s.cashback_percent >= $${params.length}`;
+    // Aliased `i` to match the FROM below. This was `s`, left over from an
+    // earlier self-join: with the filter unset the empty string hid the typo, so
+    // `/top-deals` worked and `/top-deals?minCashback=10` failed with
+    // "missing FROM-clause entry for table s" on every request.
+    filterSql = `AND i.cashback_percent >= $${params.length}`;
   }
 
   const rows = await query<CardRow & { match_id: string }>(
-    `SELECT DISTINCT ON (i.match_id)
-            ${CARD_COLUMNS},
-            i.match_id::text AS match_id
-       FROM scraped_items i
-       JOIN crawl_targets t ON t.id = i.target_id
-      WHERE i.match_id IS NOT NULL
-        ${filterSql}
-      ORDER BY i.match_id, i.cashback_percent DESC NULLS LAST, i.scraped_at DESC`,
+    `SELECT best.*
+       FROM (
+              SELECT DISTINCT ON (i.match_id)
+                     ${CARD_COLUMNS},
+                     i.match_id::text AS match_id
+                FROM scraped_items i
+                JOIN crawl_targets t ON t.id = i.target_id
+               WHERE i.match_id IS NOT NULL
+                 ${filterSql}
+               ORDER BY i.match_id, i.cashback_percent DESC NULLS LAST, i.scraped_at DESC
+            ) AS best
+      ORDER BY best.cashback_percent DESC NULLS LAST, best.scraped_at DESC, best.id`,
     params
   );
 
