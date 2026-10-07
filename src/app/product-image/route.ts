@@ -10,8 +10,8 @@
  * else only routable locally.
  *
  * So: HTTPS only, and the host must be in the allowlist. `ALLOWED_IMAGE_HOSTS`
- * adds hosts without a code change; the built-in defaults cover the upstream
- * CDNs the crawler currently records.
+ * adds hosts without a code change; the built-in defaults cover the image CDNs
+ * the crawler currently records.
  *
  * Every rejection is a 400 with a reason rather than a silent empty response —
  * a proxy that fails invisibly is indistinguishable from a proxy that is broken.

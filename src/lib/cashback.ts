@@ -1,7 +1,7 @@
 /**
  * Cashback presentation.
  *
- * `cashback_percent` is the number upstream advertises; `cashback` is the ruble amount
+ * `cashback_percent` is the number the source advertises; `cashback` is the ruble amount
  * the crawler derives from the price. They are different units and were briefly
  * stored in one column, which is why both are read and neither is derived here.
  */
@@ -17,7 +17,7 @@ export function cashbackTier(percent: number | null): CashbackTier {
 
 export function cashbackLabel(percent: number | null): string {
   if (percent === null) return '—';
-  // One decimal is what upstream shows; trailing ",0" reads as false precision.
+  // One decimal is what the source shows; trailing ",0" reads as false precision.
   const fixed = percent.toFixed(1);
   return `${fixed.endsWith('.0') ? fixed.slice(0, -2) : fixed}%`;
 }

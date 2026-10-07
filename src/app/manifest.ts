@@ -2,7 +2,7 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Витрина товаров upstream',
+    name: 'Витрина товаров',
     short_name: 'Витрина',
     description: 'Каталог товаров с ценами и кэшбэком',
     start_url: '/',

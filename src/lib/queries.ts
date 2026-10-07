@@ -451,7 +451,7 @@ export async function getProduct(id: string): Promise<ProductDetail | null> {
 /**
  * Highest cashback across all targets, one row per `match_id`.
  *
- * `DISTINCT ON` collapses the same upstream product appearing in several targets. Rows
+ * `DISTINCT ON` collapses the same product appearing in several targets. Rows
  * with a null `match_id` are excluded: without a stable grouping key the
  * "best deal" list would deduplicate arbitrarily and show the same product twice,
  * which is worse than showing it once per target.

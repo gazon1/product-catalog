@@ -5,7 +5,7 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // upstream-ish accent, kept as tokens so a rebrand is a one-file change.
+        // Accent colour, kept as tokens so a rebrand is a one-file change.
         brand: {
           50: '#f0f6ff',
           100: '#dbe8ff',

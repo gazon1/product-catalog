@@ -5,7 +5,7 @@ import { SiteFooter } from '@/components/SiteFooter';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
 
-const title = 'Витрина товаров upstream';
+const title = 'Витрина товаров';
 const description =
   'Каталог товаров, цены и кэшбэк, собранные краулером. Данные только для чтения: витрина не изменяет базу краулера.';
 

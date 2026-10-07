@@ -11,7 +11,7 @@ export function SiteHeader() {
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
       <div className="container-page flex h-14 items-center gap-6">
         <Link href="/" className="shrink-0 text-base font-bold no-underline text-slate-900">
-          Витрина<span className="text-brand-600"></span>
+          Витрина
         </Link>
 
         <nav aria-label="Основная навигация" className="flex items-center gap-1">
