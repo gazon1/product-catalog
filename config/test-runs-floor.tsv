@@ -14,6 +14,7 @@ tests/format.test.ts	10
 tests/money.test.ts	12
 tests/params.test.ts	11
 tests/query-building.test.ts	15
+tests/read-only-role.test.ts	7
 tests/seed-data.test.ts	10
 tests/server-rendering.test.ts	3
 tests/slug.test.ts	14
