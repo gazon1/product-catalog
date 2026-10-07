@@ -1,0 +1,47 @@
+# Caddy route configuration for product-catalog — installed at
+# /opt/caddy/conf.d/product-catalog.caddy by the Caddy-vps Ansible role (repo
+# gazon1/Caddy-vps), never by this repository. To change it: edit this file,
+# commit, then run `just route product-catalog deploy/caddy.conf.caddy` from a machine
+# with that repo checked out. The Ansible role backs the file up, validates the
+# resulting config and rolls back on failure.
+#
+# CI compares this file's checksum against the copy on the VPS before every
+# deploy and refuses to ship when they differ, so a forgotten route update fails
+# the deploy instead of producing a 502.
+#
+# The upstream is the container *name* on the caddy_net network. The container
+# name is fixed in docker-compose.yml (`container_name: product-catalog`) — renaming one
+# without the other is a 502 that no test in this repository would catch.
+#
+# ⚠  The hostname below is a PLACEHOLDER. Change it to the real domain and
+# commit before running `just route`. Nothing here has been applied to any
+# server, and this file has never been compared against a running VPS.
+#
+#   shop.maxdrobin.ru  →  product-catalog:3000
+
+shop.maxdrobin.ru {
+    encode gzip zstd
+
+    reverse_proxy product-catalog:3000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        # Streamed HTML responses (React Server Components send several chunks)
+        # buffer until complete without this, which delays first paint for no
+        # benefit on a site whose pages render in well under a second.
+        flush_interval -1
+    }
+
+    header {
+        # The application already sets these in next.config.mjs; repeating them
+        # here means a route change cannot silently strip them.
+        X-Content-Type-Options  "nosniff"
+        Referrer-Policy         "strict-origin-when-cross-origin"
+        X-Frame-Options         "DENY"
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

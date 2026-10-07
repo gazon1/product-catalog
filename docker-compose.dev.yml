@@ -1,0 +1,63 @@
+# Local development: the site plus a disposable PostgreSQL seeded with synthetic
+# data.
+#
+# This is the ONLY place the schema is created. The database lives in a container
+# with no published port — the site reaches it over the compose network, so a dev
+# database is not one `psql` away from anything else on the machine.
+#
+#   just db-up      # start the database and apply migrations + seed
+#   just dev        # next dev on :3000
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: product-catalog-dev-db
+    environment:
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+      POSTGRES_DB: product_catalog
+      # Deterministic collation, so ORDER BY on text sorts the same in the dev
+      # container as it does on the production machine. 'C' is the only locale
+      # available in the slim image.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    # Alphabetical order — 01-…, 02-…, 99-seed.sql. The postgres entrypoint runs
+    # these exactly once, when the data directory is first created. Changing a
+    # file here does nothing on an existing volume; `just db-reset` is the reset.
+    volumes:
+      - ./dev/db:/docker-entrypoint-initdb.d:ro
+      - product-catalog-dev-data:/var/lib/postgresql/data
+    # Published on loopback only, so `psql` can inspect the dev data. The app
+    # itself reaches the database over the compose network by service name; this
+    # mapping exists for humans, and binding it to 0.0.0.0 would expose the
+    # database to the local network with the credentials written above.
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog -d product_catalog"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build:
+      context: .
+    container_name: product-catalog-dev
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      DATABASE_URL: postgresql://catalog:catalog@db:5432/product_catalog
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "3000:3000"
+    volumes:
+      # Source is mounted for hot reload; node_modules stays container-local
+      # because a Linux-built native module and the host's can disagree.
+      - .:/app
+      - /app/node_modules
+
+volumes:
+  product-catalog-dev-data:

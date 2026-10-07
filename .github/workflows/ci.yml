@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same branch makes the older run irrelevant, and its
+# cancelled job would otherwise hold a runner for the length of the build.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast gate first. The Docker build below takes minutes; a type error should
+  # fail in seconds instead.
+  typecheck-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit and architecture tests
+        run: npm test
+
+      # The crawler's migrations are the source of truth for the dev schema.
+      # When it is absent the check fails loudly rather than skipping — a gate
+      # that reports success having verified nothing is the failure mode this
+      # whole file exists to avoid. `||` is therefore not an option here; the
+      # job is expected to be run from a checkout that has the crawler beside
+      # it, which for a fork means the check will fail and say why.
+      - name: Dev schema matches the crawler migrations
+        run: bash scripts/check-dev-schema-sync.sh "$CRAWLER_REPO"
+        env:
+          CRAWLER_REPO: ${{ vars.CRAWLER_REPO || '../wb-parser-kotlin-new' }}
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: typecheck-and-test
+    permissions:
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # PR builds are pushed as `pr-<n>` so a branch can be reviewed with the
+      # real image (`docker pull ghcr.io/<owner>/product-catalog:pr-123`) instead of a
+      # local rebuild. Tagged images are pruned weekly by prune-ghcr.yml.
+      - name: Extract metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/product-catalog
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=pr
+
+      # `DATABASE_URL` is deliberately absent. The build must not depend on a
+      # database existing — that is the bug this project already hit once, where
+      # a build-time render baked an empty catalogue into the image. Every route
+      # that reads data is `force-dynamic` or on-demand ISR precisely so this
+      # build is safe with no database at all.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Image"
+            echo ""
+            echo "- \`${{ steps.meta.outputs.tags }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

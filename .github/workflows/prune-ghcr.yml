@@ -1,0 +1,57 @@
+name: Prune GHCR images
+
+# Weekly cleanup. Every push and every PR produces a tag, and the registry bills
+# for stored layers — `pr-*` tags in particular accumulate quickly and are only
+# useful while a review is open.
+on:
+  schedule:
+    # Sunday 04:17 UTC. Deliberately not on the hour: every scheduled workflow
+    # in the world fires at :00, and the queue at the top of the hour is where
+    # delayed runs come from.
+    - cron: '17 4 * * 0'
+  workflow_dispatch:
+
+permissions:
+  packages: write
+  issues: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Delete stale images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: product-catalog
+          package-type: container
+          # Only the `main` branch and the floating `latest` tag are durable
+          # here. Branch tags older than a week have served their purpose.
+          delete-only-untagged-versions: true
+          min-versions-to-keep: 10
+          max-versions-to-delete-per-run: 100
+          create-issue: false
+
+      - name: Delete pull-request tags older than 14 days
+        run: |
+          # `delete-package-versions` does not select by tag name, so PR tags are
+          # pruned explicitly. Without this they accumulate forever — unlike
+          # branch tags, nothing ever moves them.
+          gh api --paginate "/users/${{ github.repository_owner }}/packages/container/product-catalog/versions" \
+            --jq '.[] | select(any(.metadata.container.tags[]?; startswith("pr-"))) | .id' \
+          | while read -r id; do
+              created=$(gh api "/users/${{ github.repository_owner }}/packages/container/product-catalog/versions/$id" \
+                --jq '.created_at')
+              age_days=$(( ( $(date -u +%s) - $(date -u -d "$created" +%s) ) / 86400 ))
+              if [ "$age_days" -gt 14 ]; then
+                echo "deleting pr-tagged version $id ($age_days days old)"
+                gh api -X DELETE \
+                  "/users/${{ github.repository_owner }}/packages/container/product-catalog/versions/$id"
+              fi
+            done
+
+      - name: Summary
+        run: |
+          echo "### Pruned" >> "$GITHUB_STEP_SUMMARY"

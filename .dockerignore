@@ -1,0 +1,23 @@
+# Build context exclusions.
+#
+# The dev database scripts are the notable ones: dev/db/99-seed.sql is 1.8 MB of
+# generated SQL and has no business in a production image. It is used by
+# `docker-compose.dev.yml` via a bind mount, not by the image.
+.git
+.gitignore
+.github
+node_modules
+.next
+Dockerfile
+.dockerignore
+docker-compose*.yml
+dev
+tests
+justfile
+*.md
+.env
+.env.*
+!.env.example
+*.log
+.idea
+.vscode

@@ -1,0 +1,41 @@
+# Production / VPS compose.
+#
+# The site talks to the crawler's PostgreSQL over the network and never manages
+# it: no `db` service here, no volume, no migration step. `docker compose up` on
+# the VPS therefore cannot alter the crawler's database — which is the whole
+# reason the read-only guarantee does not depend on anybody remembering to be
+# careful.
+#
+# For a local database with synthetic data use docker-compose.dev.yml instead.
+
+services:
+  product-catalog:
+    image: ghcr.io/${IMAGE_OWNER:-gazon1}/product-catalog:${TAG:-latest}
+    container_name: product-catalog
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Overridable from .env, but defaulted here so `docker compose config`
+      # shows a complete picture of what the container needs.
+      NODE_ENV: production
+      PORT: "3000"
+    ports:
+      - "127.0.0.1:3000:3000"
+    # The crawler writes on a schedule; a site container restarting in a tight
+    # loop while the database is down would only add noise to that machine.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

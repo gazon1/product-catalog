@@ -1,0 +1,186 @@
+name: Deploy to VPS
+
+# Manual production deploy. Pushing to `main` builds and publishes an image to
+# GHCR (see ci.yml); getting that image onto the server is always a deliberate
+# action.
+#
+# Unlike the previous solution there is no migration step here, and that is the
+# point: the site reads the crawler's database with a SELECT-only role, so a
+# deploy cannot alter it. Nothing in this workflow needs to be reversible.
+#
+# Required repository secrets:
+#   VPS_HOST, VPS_USER, VPS_PORT, VPS_APP_DIR, VPS_SSH_KEY
+on:
+  workflow_dispatch:
+    inputs:
+      skip_route_check:
+        description: "Deploy even if the Caddy route differs from the one on the server"
+        type: boolean
+        default: false
+
+# Two manual runs must never interleave.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/product-catalog
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Settings → Environments → production restricts who may run this.
+    environment: production
+
+    steps:
+      # Only needed for the route check — the deploy itself runs on the server.
+      - uses: actions/checkout@v7
+
+      # workflow_dispatch lets you pick any ref. Only main is deployable —
+      # otherwise you could ship an arbitrary branch to production.
+      - name: Refuse to deploy a non-default branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Deploy only from main. Refusing to deploy ${{ github.ref_name }}."
+          exit 1
+
+      - name: Resolve image tag
+        id: meta
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          # docker/metadata-action in ci.yml publishes `format=short`, a
+          # 7-character prefix. Match that exactly.
+          echo "tag=${SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "Deploying $IMAGE:${SHA:0:7} (commit $SHA)"
+
+      # Fails here with a clear message rather than midway through a deploy.
+      - name: Verify image exists in GHCR
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if ! docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            echo "::error::Image $IMAGE:$TAG not found in GHCR. Run the CI build for this commit first."
+            exit 1
+          fi
+          echo "Found $IMAGE:$TAG"
+
+      # ssh-agent (not a bare openssh-client install) keeps host-key
+      # verification on, so a MITM cannot silently intercept the deploy.
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+
+      # The route snippet in this repo and the one Caddy actually serves can
+      # drift: the snippet is applied by Ansible from a developer machine, the
+      # image is deployed from here. Shipping a version whose route was never
+      # applied is how you get a 502 that "the deploy succeeded".
+      - name: Check the Caddy route matches this commit
+        if: ${{ !inputs.skip_route_check }}
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          LOCAL_SUM: ${{ hashFiles('deploy/caddy.conf.caddy') }}
+        run: |
+          remote_sum=$(ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "sha256sum /opt/caddy/conf.d/product-catalog.caddy 2>/dev/null | cut -d' ' -f1" \
+            || echo "<missing>")
+          echo "repo      $LOCAL_SUM"
+          echo "installed $remote_sum"
+          if [ "$remote_sum" != "$LOCAL_SUM" ]; then
+            echo "::error::The Caddy route differs from deploy/caddy.conf.caddy (or is absent). Apply it first."
+            exit 1
+          fi
+          echo "Route is in sync."
+
+      - name: Deploy to server
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          APP_DIR: ${{ secrets.VPS_APP_DIR }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<EOF
+          set -euo pipefail
+          cd "$APP_DIR"
+          export TAG="$TAG"
+
+          # The compose file lives in this directory, so it must match the
+          # commit being deployed. `pull --ff-only` refuses to merge or rebase,
+          # so a dirty checkout stops the deploy instead of silently rewriting
+          # local work.
+          if [ -d .git ]; then
+            echo "→ Updating deploy checkout..."
+            git pull --ff-only
+            echo "Deploy checkout is now at \$(git rev-parse --short HEAD) on \$(git rev-parse --abbrev-ref HEAD)"
+          else
+            echo "::warning::$APP_DIR is not a git checkout — deploying the files as they are on disk."
+          fi
+
+          # Git preserves the exec bit only for files it tracks as executable.
+          if [ ! -x ./scripts/wait-healthy.sh ]; then
+            chmod +x ./scripts/wait-healthy.sh
+          fi
+
+          echo "→ Current state before deploy:"
+          docker compose images || true
+
+          # Record the running image first so a rollback is one command.
+          docker inspect product-catalog --format '{{index .Config.Image}}' 2>/dev/null \
+            > /tmp/product-catalog-prev-image || echo "unknown" > /tmp/product-catalog-prev-image
+          echo "Previous image: \$(cat /tmp/product-catalog-prev-image)"
+
+          # Pull BEFORE recreating anything: an unreachable image stops the
+          # deploy here with the old stack still running.
+          docker compose pull
+
+          # `up -d` (not `down`) recreates only changed services, avoiding a
+          # full outage.
+          docker compose up -d --remove-orphans
+
+          ./scripts/wait-healthy.sh product-catalog 300
+
+          echo "→ Final state:"
+          docker compose ps
+          EOF
+
+      # Runs from the runner through the public domain, so it also proves Caddy,
+      # TLS and the network path are healthy — not just the container.
+      - name: Smoke test
+        env:
+          SMOKE_URL: ${{ vars.PUBLIC_URL }}
+        run: |
+          if [ -z "$SMOKE_URL" ]; then
+            echo "::error::Repository variable PUBLIC_URL is not set."
+            exit 1
+          fi
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 15 "$SMOKE_URL/api/health" | grep -q '"ok":true'; then
+              echo "✅ Site healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            echo "Attempt $i: not healthy yet, retrying in 15s"
+            sleep 15
+          done
+          echo "::error::Site did not become healthy after 10 attempts"
+          echo "Rollback: cd \$APP_DIR && export TAG=<prev-sha> && docker compose up -d"
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deployed"
+            echo ""
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Image: \`$IMAGE:${{ steps.meta.outputs.tag }}\`"
+            echo "- Ref: ${{ github.ref_name }}"
+            echo "- Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"

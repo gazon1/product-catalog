@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Local env — .env.example is committed, .env never is
+.env
+.env*.local
+!.env.example
+
+# Dev database dump, if anyone makes one. The seed is committed on purpose:
+# it is deterministic and regenerating it produces no diff.
+*.sql.gz
+*.dump
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
+
+# Vercel
+.vercel
