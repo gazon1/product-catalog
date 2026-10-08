@@ -40,13 +40,36 @@ jobs:
       # The crawler's migrations are the source of truth for the dev schema.
       # When it is absent the check fails loudly rather than skipping — a gate
       # that reports success having verified nothing is the failure mode this
-      # whole file exists to avoid. `||` is therefore not an option here; the
-      # job is expected to be run from a checkout that has the crawler beside
-      # it, which for a fork means the check will fail and say why.
+      # whole file exists to avoid. `||` is therefore not an option here.
+      #
+      # The crawler is checked out here rather than expected to be beside the
+      # storefront. That expectation was what made CI red: `vars.CRAWLER_REPO`
+      # is unset, so the default `../wb-parser-kotlin-new` pointed at a
+      # directory that does not exist on a runner, and the gate correctly
+      # refused to pass. A gate that only works when someone remembers to set a
+      # variable is a gate that is always red.
+      #
+      # Only the migration folder is fetched. The check needs nothing else, and
+      # a full checkout of a Kotlin project to read two SQL files would make
+      # every run slower for no benefit.
+      #
+      # No token: both repositories are public. If the crawler ever goes
+      # private this step needs `token:`, and failing to fetch is the correct
+      # behaviour — the gate below will say the migrations are missing rather
+      # than quietly comparing against nothing.
+      - name: Check out the crawler's migrations
+        uses: actions/checkout@v7
+        with:
+          repository: gazon1/wb-parser-kotlin-new
+          ref: ${{ vars.CRAWLER_REF || 'main' }}
+          path: crawler
+          sparse-checkout: app/src/main/resources/db/migration
+          sparse-checkout-cone-mode: true
+
       - name: Dev schema matches the crawler migrations
         run: bash scripts/check-dev-schema-sync.sh "$CRAWLER_REPO"
         env:
-          CRAWLER_REPO: ${{ vars.CRAWLER_REPO || '../wb-parser-kotlin-new' }}
+          CRAWLER_REPO: ${{ vars.CRAWLER_REPO || 'crawler' }}
 
       # `npm test` needs a working Docker daemon: tests/database.test.ts starts a
       # postgres:16-alpine container, applies the crawler migrations above and
