@@ -67,9 +67,7 @@ jobs:
           sparse-checkout-cone-mode: true
 
       - name: Dev schema matches the crawler migrations
-        run: bash scripts/check-dev-schema-sync.sh "$CRAWLER_REPO"
-        env:
-          CRAWLER_REPO: ${{ vars.CRAWLER_REPO || 'crawler' }}
+        run: bash scripts/check-dev-schema-sync.sh "crawler"
 
       # `npm test` needs a working Docker daemon: tests/database.test.ts starts a
       # postgres:16-alpine container, applies the crawler migrations above and
