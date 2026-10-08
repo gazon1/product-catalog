@@ -10,7 +10,12 @@
 
 services:
   product-catalog:
-    image: ghcr.io/${IMAGE_OWNER:-gazon1}/product-catalog:${TAG:-latest}
+    # TAG is REQUIRED, with no `latest` fallback. A default here means a deploy
+    # that forgot to set TAG ships whatever commit the registry considers newest
+    # — which is how a rollback stops being a rollback. The same rule as
+    # gazon1/dacha-na-udachu-website; the deploy workflow always sets it from
+    # the commit being shipped.
+    image: ghcr.io/${IMAGE_OWNER:-gazon1}/product-catalog:${TAG:?TAG must be set to the commit SHA tag, e.g. TAG=$(git rev-parse --short HEAD)}
     container_name: product-catalog
     restart: unless-stopped
     env_file:
@@ -20,10 +25,18 @@ services:
       # shows a complete picture of what the container needs.
       NODE_ENV: production
       PORT: "3000"
-    ports:
-      - "127.0.0.1:3000:3000"
+    # Reached through the Caddy container that gazon1/Caddy-vps manages, over
+    # the shared external network. NOT a published port: nothing outside this
+    # machine should reach the storefront directly, and publishing
+    # 127.0.0.1:3000 would put a second way in that silently bypasses TLS and
+    # the security headers the route sets.
+    networks:
+      - default
+      - caddy_net
+    expose:
+      - "3000"
     # The crawler writes on a schedule; a site container restarting in a tight
-    # loop while the database is down would only add noise to that machine.
+    # loop while the database is down would only add noise on that machine.
     healthcheck:
       test:
         - CMD
@@ -39,3 +52,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+networks:
+  # Created and owned by the Caddy-vps Ansible role. Declaring it external here
+  # means this compose file never creates or deletes it.
+  caddy_net:
+    external: true
+    name: caddy_net

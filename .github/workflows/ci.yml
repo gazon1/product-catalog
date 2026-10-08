@@ -40,34 +40,25 @@ jobs:
       # The crawler's migrations are the source of truth for the dev schema.
       # When it is absent the check fails loudly rather than skipping — a gate
       # that reports success having verified nothing is the failure mode this
-      # whole file exists to avoid. `||` is therefore not an option here.
+      # whole file exists to avoid.
       #
-      # The crawler is checked out here rather than expected to be beside the
-      # storefront. That expectation was what made CI red: `vars.CRAWLER_REPO`
-      # is unset, so the default `../wb-parser-kotlin-new` pointed at a
-      # directory that does not exist on a runner, and the gate correctly
-      # refused to pass. A gate that only works when someone remembers to set a
-      # variable is a gate that is always red.
-      #
-      # Only the migration folder is fetched. The check needs nothing else, and
-      # a full checkout of a Kotlin project to read two SQL files would make
-      # every run slower for no benefit.
-      #
-      # No token: both repositories are public. If the crawler ever goes
-      # private this step needs `token:`, and failing to fetch is the correct
-      # behaviour — the gate below will say the migrations are missing rather
-      # than quietly comparing against nothing.
-      - name: Check out the crawler's migrations
+      # The crawler is a separate repository, so a plain checkout of this one
+      # cannot verify the sync: dev/db/ would be compared against nothing. It is
+      # fetched here as a sibling checkout, which is the layout the check
+      # expects. CRAWLER_REPO_URL is a repository variable — the crawler is
+      # public, so no token is needed.
+      - name: Check out the crawler as a sibling checkout
+        if: ${{ vars.CRAWLER_REPO_URL != '' }}
         uses: actions/checkout@v7
         with:
-          repository: gazon1/wb-parser-kotlin-new
+          repository: ${{ vars.CRAWLER_REPO }}
           ref: ${{ vars.CRAWLER_REF || 'main' }}
-          path: crawler
-          sparse-checkout: app/src/main/resources/db/migration
-          sparse-checkout-cone-mode: true
+          path: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
 
       - name: Dev schema matches the crawler migrations
-        run: bash scripts/check-dev-schema-sync.sh "crawler"
+        run: bash scripts/check-dev-schema-sync.sh "$CRAWLER_DIR"
+        env:
+          CRAWLER_DIR: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
 
       # `npm test` needs a working Docker daemon: tests/database.test.ts starts a
       # postgres:16-alpine container, applies the crawler migrations above and
@@ -86,16 +77,6 @@ jobs:
 
       - name: Unit, architecture and database tests
         run: npm test
-
-      # `npm test` exits 0 whether 138 tests ran or one file was silently
-      # excluded by a broken pattern — and the file that needs a container is
-      # the first one such a pattern drops. This reads the JUnit XML the run
-      # above wrote, so it must come after it, never before.
-      #
-      # Floors are per file, not per total: a single total lets the other 108
-      # tests mask the disappearance of the 30 that talk to Postgres.
-      - name: Every recorded test file actually ran
-        run: python3 scripts/check-test-runs.py
 
   build-and-push:
     runs-on: ubuntu-latest

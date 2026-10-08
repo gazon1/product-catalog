@@ -1,0 +1,8 @@
+# This directory is intentionally empty.
+#
+# Next.js serves anything here at the site root. The project currently has no
+# static files here — the favicon is generated from src/app/icon.tsx — but the
+# Dockerfile copies this directory into the runtime stage, and `COPY` of a
+# missing path fails the build outright.
+#
+# Keeping it means adding public/asset.png later needs no Dockerfile change.

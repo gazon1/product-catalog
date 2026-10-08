@@ -99,3 +99,58 @@ release:
 [doc('Block until a container reports healthy')]
 wait-healthy container='product-catalog':
     bash scripts/wait-healthy.sh {{container}} 300
+
+# ==============================================================================
+# Caddy route
+# ==============================================================================
+# The shared reverse proxy is NOT this project's business. It is provisioned by
+# the Caddy-vps Ansible repository (gazon1/Caddy-vps), which backs the snippet
+# up, validates the result and rolls back on failure. Nothing here touches
+# caddy_global.
+#
+# CADDY_REPO points at a Caddy-vps checkout and defaults to a sibling directory,
+# which is where it sits on a developer machine. The deploy workflow's route
+# drift check compares deploy/caddy.conf.caddy against
+# /opt/caddy/conf.d/product-catalog.caddy, so the snippet has to be applied from
+# this recipe before a deploy — a forgotten `just route` fails the deploy
+# instead of shipping a 502.
+CADDY_REPO := env('CADDY_REPO', justfile_directory() / '..' / 'Caddy-vps')
+ROUTE_NAME := 'product-catalog'
+
+[doc('Apply deploy/caddy.conf.caddy to the shared proxy (needs a Caddy-vps checkout)')]
+route *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f "{{ CADDY_REPO }}/site.yml" ]; then
+      echo "error: no Caddy-vps checkout at {{ CADDY_REPO }}" >&2
+      echo "       git clone git@github.com:gazon1/Caddy-vps.git, or set" >&2
+      echo "       CADDY_REPO=/path/to/Caddy-vps and re-run." >&2
+      exit 1
+    fi
+    just --justfile "{{ CADDY_REPO }}/justfile" route "{{ ROUTE_NAME }}" \
+      "{{ justfile_directory() }}/deploy/caddy.conf.caddy" {{ args }}
+
+[doc('Compare the local route snippet against the one installed on a host')]
+route-drift host="" user="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    local_file="{{ justfile_directory() }}/deploy/caddy.conf.caddy"
+    if [ -z "{{ host }}" ]; then
+      echo "usage: just route-drift <host> [user]"
+      echo "  compares $local_file against /opt/caddy/conf.d/{{ ROUTE_NAME }}.caddy"
+      exit 0
+    fi
+    target="{{ user }}"
+    [ -n "$target" ] || target="root"
+    local_sum=$(sha256sum "$local_file" | cut -d' ' -f1)
+    remote_sum=$(ssh "$target@{{ host }}" \
+      "sha256sum /opt/caddy/conf.d/{{ ROUTE_NAME }}.caddy 2>/dev/null | cut -d' ' -f1" \
+      || echo "<unreadable>")
+    echo "repo      $local_sum"
+    echo "installed $remote_sum"
+    if [ "$local_sum" = "$remote_sum" ]; then
+      echo "in sync"
+    else
+      echo "OUT OF SYNC — apply it with: just route"
+      exit 1
+    fi

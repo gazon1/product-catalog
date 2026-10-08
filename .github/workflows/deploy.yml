@@ -66,15 +66,29 @@ jobs:
           fi
           echo "Found $IMAGE:$TAG"
 
+      # ubuntu-latest is a fresh VM every run, so ~/.ssh/known_hosts starts
+      # empty. Without this the first `ssh` below dies with "Host key
+      # verification failed" and never reaches the deploy. Pinning the key here
+      # (rather than disabling the check) is what keeps a MITM from silently
+      # intercepting the deploy.
+      - name: Trust the VPS host key
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
       # ssh-agent (not a bare openssh-client install) keeps host-key
       # verification on, so a MITM cannot silently intercept the deploy.
+      # v0.10.0 takes only `ssh-private-key` — host/username/key/port were
+      # removed as inputs, and passing them fails with "ssh-private-key
+      # argument is empty". The port travels with each `ssh -p` instead.
       - name: Configure SSH
         uses: webfactory/ssh-agent@v0.10.0
         with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
 
       # The route snippet in this repo and the one Caddy actually serves can
       # drift: the snippet is applied by Ansible from a developer machine, the
@@ -86,14 +100,19 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
-          LOCAL_SUM: ${{ hashFiles('deploy/caddy.conf.caddy') }}
         run: |
+          # NOT the hashFiles() context function: it is documented as a
+          # SHA-256 of the matched file, but for a byte-identical file it
+          # returned a different digest than sha256sum, so the comparison never
+          # matched and every deploy failed this check while the two sides were
+          # actually in sync. Both sides are hashed here with the same command.
+          local_sum=$(sha256sum deploy/caddy.conf.caddy | cut -d' ' -f1)
           remote_sum=$(ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             "sha256sum /opt/caddy/conf.d/product-catalog.caddy 2>/dev/null | cut -d' ' -f1" \
             || echo "<missing>")
-          echo "repo      $LOCAL_SUM"
+          echo "repo      $local_sum"
           echo "installed $remote_sum"
-          if [ "$remote_sum" != "$LOCAL_SUM" ]; then
+          if [ "$remote_sum" != "$local_sum" ]; then
             echo "::error::The Caddy route differs from deploy/caddy.conf.caddy (or is absent). Apply it first."
             exit 1
           fi

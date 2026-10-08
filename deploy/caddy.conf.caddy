@@ -1,9 +1,9 @@
 # Caddy route configuration for product-catalog — installed at
 # /opt/caddy/conf.d/product-catalog.caddy by the Caddy-vps Ansible role (repo
 # gazon1/Caddy-vps), never by this repository. To change it: edit this file,
-# commit, then run `just route product-catalog deploy/caddy.conf.caddy` from a machine
-# with that repo checked out. The Ansible role backs the file up, validates the
-# resulting config and rolls back on failure.
+# commit, then run `just route product-catalog deploy/caddy.conf.caddy` from a
+# machine with that repo checked out. The Ansible role backs the file up,
+# validates the resulting config and rolls back on failure.
 #
 # CI compares this file's checksum against the copy on the VPS before every
 # deploy and refuses to ship when they differ, so a forgotten route update fails
@@ -13,13 +13,12 @@
 # name is fixed in docker-compose.yml (`container_name: product-catalog`) — renaming one
 # without the other is a 502 that no test in this repository would catch.
 #
-# ⚠  The hostname below is a PLACEHOLDER. Change it to the real domain and
-# commit before running `just route`. Nothing here has been applied to any
-# server, and this file has never been compared against a running VPS.
-#
-#   shop.maxdrobin.ru  →  product-catalog:3000
+# The hostname is the production domain. It also has to match
+# NEXT_PUBLIC_SITE_URL on the server: the sitemap, robots.txt and canonical
+# tags are generated from that variable, and a mismatch ships a sitemap full of
+# URLs that point nowhere.
 
-shop.maxdrobin.ru {
+wb-parser.maxdrobin.ru {
     encode gzip zstd
 
     reverse_proxy product-catalog:3000 {

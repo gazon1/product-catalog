@@ -545,10 +545,21 @@ export async function getSiteStats(): Promise<SiteStats> {
   };
 }
 
-/** Cheap liveness probe: proves the connection works and the tables are visible. */
+/**
+ * Cheap liveness probe: proves the connection works AND that the crawler's
+ * tables are visible.
+ *
+ * It has to name a table. `SELECT 1` answers "is Postgres reachable", which is
+ * a different question from "can this site render anything" — and the second
+ * one is the one the deploy smoke test is relying on. Against a database that
+ * exists but is missing `scraped_items`, `SELECT 1` returns 200, the healthcheck
+ * goes green and every page 500s: a successful rollout of a broken site.
+ *
+ * LIMIT 1 keeps it a probe rather than a count over the whole table.
+ */
 export async function ping(): Promise<boolean> {
   try {
-    await query('SELECT 1');
+    await query('SELECT 1 FROM scraped_items LIMIT 1');
     return true;
   } catch (err) {
     console.error('[db] ping failed', err);
