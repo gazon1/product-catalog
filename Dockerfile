@@ -27,6 +27,11 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# `public/` is optional. When the repo has no static assets the directory is
+# absent, and the unconditional COPY in the runner stage would otherwise fail.
+# Creating a matching placeholder here keeps that COPY idempotent.
+RUN ls public/ > /dev/null 2>&1 || mkdir public
+
 # DATABASE_URL is *not* baked in and must not be: the image is built in CI, where
 # no production credential exists, and the value differs per environment. It is
 # read at runtime from the container environment (see docker-compose.yml), which
