@@ -51,9 +51,9 @@ dev:
 schema-sync *args:
     bash scripts/sync-dev-schema.sh {{args}}
 
-[doc('Fail if dev/db/ no longer matches the crawler migrations')]
-schema-check:
-    bash scripts/check-dev-schema-sync.sh
+[doc('Fail if dev/db/ no longer matches the crawler migrations (optional path to the crawler repo)')]
+schema-check *args:
+    bash scripts/check-dev-schema-sync.sh {{args}}
 
 # ==============================================================================
 # Verification
