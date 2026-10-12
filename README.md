@@ -128,7 +128,9 @@ just check     # typecheck → schema-check → tests → test-runs → build
 just route product-catalog deploy/caddy.conf.caddy   # из репозитория Caddy-vps
 ```
 
-**Перед первым выкатом заменить** в `deploy/caddy.conf.caddy` домен `shop.maxdrobin.ru` на настоящий — сейчас это плейсхолдер, и файл ни разу не сравнивался с работающим сервером. Задать в репозитории переменные `CRAWLER_REPO` и `PUBLIC_URL`.
+**Состояние на 2026-10:** маршрут `wb-parser.maxdrobin.ru` установлен на VPS и совпадает с `deploy/caddy.conf.caddy` побайтово (гейт деплоя сверяет `sha256sum`), сертификат Let's Encrypt выпущен, DNS указывает на сервер. Переменные `CRAWLER_REPO*` и `PUBLIC_URL` заданы; секреты `VPS_HOST`/`VPS_USER`/`VPS_PORT`/`VPS_APP_DIR`/`VPS_SSH_KEY` и environment `production` — тоже. Каталог деплоя на сервере — `~/product-catalog`.
+
+**Выкат отложен:** продовой Postgres краулера не существует — на `91.188.212.209` лежит legacy-схема (`alembic_version`, `products_actual`), а не Flyway-схема (`crawl_targets`, `scraped_items`), которую читает витрина. `Deploy to VPS` прогнать можно, но smoke-тест `/api/health` вернёт 503 до тех пор, пока база краулера не появится и в `~/product-catalog/.env` не будет подставлен настоящий `DATABASE_URL`.
 
 Отличия от предыдущего решения: в `deploy.yml` **нет шага миграции** — витрина не может изменить базу, поэтому выкат нечего откатывать; `docker compose` на сервере не содержит сервиса `db`.
 
