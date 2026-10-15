@@ -11,9 +11,11 @@ The full-stack Ansible playbook lives in the **Caddy-vps** repository:
 ```
 
 This playbook deploys in order:
-1. **wb-parser** — parser container
-2. **Flyway migrations** — runs on shared DB after parser is healthy
-3. **product-catalog (wbshop)** — the storefront
+1. **adsbrowser** — headless browser (needed by the parser for AdsPower automation)
+2. **wb-parser** — parser container
+3. **Flyway migrations** — runs on shared DB after parser is healthy
+4. **product-catalog (wbshop)** — the storefront
+5. **Caddy route** — publishes `wb-parser.maxdrobin.ru` via the shared reverse proxy
 
 ### Usage via just
 
@@ -30,8 +32,9 @@ just ansible-dry-run
 
 ### Requirements
 
-1. **Caddy-vps** at `~/Caddy-vps` (or set `CADDY_REPO` env var)
+1. **Caddy-vps** at `~/Caddy-vps` (or set `CADDY_VPS_DIR` env var)
 2. **wb-parser** at `../wb-parser-kotlin-new/sailfish` (or set `PARSER_REPO` env var)
+3. Env vars: `WBPARSER_DB_PASSWORD`, `WBPARSER_ADMIN_PASSWORD`, `WBPARSER_ADMIN_API_KEY`
 
 ### Direct ansible-playbook
 
