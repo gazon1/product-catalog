@@ -108,27 +108,27 @@ wait-healthy container='product-catalog':
 # up, validates the result and rolls back on failure. Nothing here touches
 # caddy_global.
 #
-# CADDY_REPO points at a Caddy-vps checkout and defaults to a sibling directory,
+# CADDY_VPS_DIR points at a Caddy-vps checkout and defaults to a sibling directory,
 # which is where it sits on a developer machine. The deploy workflow's route
 # drift check compares deploy/caddy.conf.caddy against
 # /opt/caddy/conf.d/product-catalog.caddy, so the snippet has to be applied from
 # this recipe before a deploy — a forgotten `just route` fails the deploy
 # instead of shipping a 502.
-# Caddy-vps defaults to ~/Caddy-vps on this machine; override with CADDY_REPO env var
-CADDY_REPO := env('CADDY_REPO', home_directory() / 'Caddy-vps')
+# Caddy-vps defaults to ~/Caddy-vps on this machine; override with CADDY_VPS_DIR env var
+CADDY_VPS_DIR := env('CADDY_VPS_DIR', home_directory() / 'Caddy-vps')
 ROUTE_NAME := 'product-catalog'
 
 [doc('Apply deploy/caddy.conf.caddy to the shared proxy (needs a Caddy-vps checkout)')]
 route *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ ! -f "{{ CADDY_REPO }}/site.yml" ]; then
-      echo "error: no Caddy-vps checkout at {{ CADDY_REPO }}" >&2
+    if [ ! -f "{{ CADDY_VPS_DIR }}/site.yml" ]; then
+      echo "error: no Caddy-vps checkout at {{ CADDY_VPS_DIR }}" >&2
       echo "       git clone git@github.com:gazon1/Caddy-vps.git, or set" >&2
-      echo "       CADDY_REPO=/path/to/Caddy-vps and re-run." >&2
+      echo "       CADDY_VPS_DIR=/path/to/Caddy-vps and re-run." >&2
       exit 1
     fi
-    just --justfile "{{ CADDY_REPO }}/justfile" route "{{ ROUTE_NAME }}" \
+    just --justfile "{{ CADDY_VPS_DIR }}/justfile" route "{{ ROUTE_NAME }}" \
       "{{ justfile_directory() }}/deploy/caddy.conf.caddy" {{ args }}
 
 [doc('Compare the local route snippet against the one installed on a host')]
@@ -178,7 +178,7 @@ route-drift host="" user="":
 #   just ansible-deploy --check      # dry-run with --check --diff
 # ==============================================================================
 
-WBSHOP_PLAYBOOK := CADDY_REPO / "playbooks" / "wbshop.yml"
+WBSHOP_PLAYBOOK := CADDY_VPS_DIR / "playbooks" / "wbshop.yml"
 WBSHOP_COMPOSE_SRC := justfile_directory() / "docker-compose.yml"
 # Default to sibling directory for parser; can be overridden
 PARSER_REPO := env('PARSER_REPO', justfile_directory() / '..' / 'wb-parser-kotlin-new' / 'sailfish')
