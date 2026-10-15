@@ -159,33 +159,30 @@ route-drift host="" user="":
 # ==============================================================================
 # Ansible deploy (parser + migrations + wbshop)
 # ==============================================================================
-# Full deploy via Ansible: runs the parser first, then migrations, then wbshop.
-# This is the preferred deploy method when you need the full stack.
+# Full stack deploy: parser → Flyway migrations → wbshop.
+# Use this when you need to update the parser or run migrations.
 #
-# The playbook lives in the Caddy-vps repository and orchestrates:
-#   1. Deploy/updated wb-parser container
-#   2. Wait for parser to be healthy
-#   3. Run Flyway migrations on the shared DB (if needed)
-#   4. Deploy/updated product-catalog (wbshop) container
+# For wbshop-only updates (no parser, no migrations), use the GitHub Actions
+# "Deploy to VPS" workflow instead — it's simpler and faster.
 #
-# Required env vars / Ansible vars:
-#   CADDY_VPS_DIR  - path to Caddy-vps checkout (default: ../Caddy-vps)
-#   WB_PARSER_DIR  - path to wb-parser-kotlin-new/sailfish checkout
+# Delegates to ~/Caddy-vps/just wbshop-deploy.
+#
+# Required env vars:
+#   CADDY_VPS_DIR  - path to Caddy-vps checkout (default: ~/Caddy-vps)
+#   PARSER_REPO    - path to wb-parser-kotlin-new/sailfish checkout
+#   WBPARSER_DB_PASSWORD, WBPARSER_ADMIN_PASSWORD, WBPARSER_ADMIN_API_KEY
 #
 # Usage:
 #   just ansible-deploy              # deploy current HEAD
 #   just ansible-deploy <tag>        # deploy a specific tag
-#   just ansible-deploy --check      # dry-run with --check --diff
+#   just ansible-deploy -- --check   # dry-run
 # ==============================================================================
 
-WBSHOP_PLAYBOOK := CADDY_VPS_DIR / "playbooks" / "wbshop.yml"
-WBSHOP_COMPOSE_SRC := justfile_directory() / "docker-compose.yml"
-# Default to sibling directory for parser; can be overridden
 PARSER_REPO := env('PARSER_REPO', justfile_directory() / '..' / 'wb-parser-kotlin-new' / 'sailfish')
 PARSER_COMPOSE_SRC := PARSER_REPO / "deploy" / "docker-compose.vps.yml"
 
 [doc('Deploy full stack via Ansible: parser → migrations → wbshop')]
-ansible-deploy tag="":
+ansible-deploy tag *args:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{ justfile_directory() }}"
@@ -195,62 +192,36 @@ ansible-deploy tag="":
       WBSHOP_TAG="$(git rev-parse --short HEAD)"
     fi
 
-    if [[ ! -f "{{ WBSHOP_PLAYBOOK }}" ]]; then
-      echo "❌ Playbook not found: {{ WBSHOP_PLAYBOOK }}"
-      echo "   Set CADDY_VPS_DIR to the Caddy-vps checkout."
-      echo "   Or clone: git clone git@github.com:gazon1/Caddy-vps.git"
+    if [[ ! -f "{{ CADDY_VPS_DIR }}/justfile" ]]; then
+      echo "❌ Caddy-vps not found at {{ CADDY_VPS_DIR }}" >&2
+      echo "   Set CADDY_VPS_DIR or clone: git clone git@github.com:gazon1/Caddy-vps.git {{ CADDY_VPS_DIR }}" >&2
       exit 1
     fi
 
     if [[ ! -f "{{ PARSER_COMPOSE_SRC }}" ]]; then
-      echo "❌ Parser compose not found: {{ PARSER_COMPOSE_SRC }}"
-      echo "   Set PARSER_REPO to the wb-parser-kotlin-new/sailfish checkout."
+      echo "❌ Parser compose not found: {{ PARSER_COMPOSE_SRC }}" >&2
+      echo "   Set PARSER_REPO to the wb-parser-kotlin-new/sailfish checkout." >&2
       exit 1
     fi
 
-    # A dirty working tree is OK for deployment (you might have local config),
-    # but warn about it.
     if [[ -n "$(git status --porcelain)" ]]; then
       echo "⚠️  Working tree is dirty:"
       git status --short
       echo ""
     fi
 
-    echo "🚀 Deploying wbshop stack via Ansible..."
-    echo "   wbshop tag: $WBSHOP_TAG"
-    echo "   playbook:   {{ WBSHOP_PLAYBOOK }}"
-    echo "   wbshop:     {{ WBSHOP_COMPOSE_SRC }}"
-    echo "   parser:     {{ PARSER_COMPOSE_SRC }}"
+    echo "🚀 Deploying wbshop stack..."
+    echo "   tag:     $WBSHOP_TAG"
+    echo "   parser:  {{ PARSER_COMPOSE_SRC }}"
     echo ""
 
-    ansible-playbook "{{ WBSHOP_PLAYBOOK }}" \
-        -e "wbshop_tag=$WBSHOP_TAG" \
+    just --justfile "{{ CADDY_VPS_DIR }}/justfile" wbshop-deploy \
         -e "wbparser_tag=$WBSHOP_TAG" \
-        -e "wbshop_compose_src={{ WBSHOP_COMPOSE_SRC }}" \
-        -e "wbparser_compose_src={{ PARSER_COMPOSE_SRC }}"
+        -e "wbshop_tag=$WBSHOP_TAG" \
+        -e "wbparser_compose_src={{ PARSER_COMPOSE_SRC }}" \
+        -e "wbshop_compose_src={{ justfile_directory() }}/docker-compose.yml" \
+        {{ args }}
 
-    echo ""
-    echo "✅ Deploy complete: wbshop=$WBSHOP_TAG"
-
-[doc('Dry-run Ansible deploy with --check --diff')]
+[doc('Dry-run Ansible deploy')]
 ansible-dry-run tag="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd "{{ justfile_directory() }}"
-
-    WBSHOP_TAG="{{ tag }}"
-    if [[ -z "$WBSHOP_TAG" ]]; then
-      WBSHOP_TAG="$(git rev-parse --short HEAD)"
-    fi
-
-    if [[ ! -f "{{ WBSHOP_PLAYBOOK }}" ]]; then
-      echo "❌ Playbook not found: {{ WBSHOP_PLAYBOOK }}"
-      exit 1
-    fi
-
-    ansible-playbook "{{ WBSHOP_PLAYBOOK }}" \
-        --check --diff \
-        -e "wbshop_tag=$WBSHOP_TAG" \
-        -e "wbparser_tag=$WBSHOP_TAG" \
-        -e "wbshop_compose_src={{ WBSHOP_COMPOSE_SRC }}" \
-        -e "wbparser_compose_src={{ PARSER_COMPOSE_SRC }}"
+    just {{ justfile_directory() }}/justfile ansible-deploy "{{ tag }}" -- --check
