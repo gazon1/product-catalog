@@ -44,6 +44,17 @@ dev:
     DATABASE_URL=$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- || echo postgresql://catalog:catalog@127.0.0.1:5433/product_catalog) \
         npm run dev
 
+# The whole stack against ONE database, the way production runs it: the crawler
+# writes `scraped_items`, this storefront reads the same table. Two databases
+# would test a topology nobody deploys. `just stack-down` stops all of it.
+[doc('Bring up dev DB + storefront + crawler against one shared database')]
+stack-up:
+    bash scripts/stack-up.sh
+
+[doc('Stop the whole stack (add --purge to also drop the database volume)')]
+stack-down *args:
+    bash scripts/stack-down.sh {{args}}
+
 # ==============================================================================
 # Database maintenance
 # ==============================================================================

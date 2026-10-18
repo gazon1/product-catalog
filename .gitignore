@@ -31,5 +31,8 @@ build/
 *.log
 npm-debug.log*
 
+# Local full-stack run state — PID files and logs from scripts/stack-up.sh
+.stack/
+
 # Vercel
 .vercel
