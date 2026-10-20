@@ -8,11 +8,12 @@
 # Raise in the same commit that adds tests. Lowering is allowed only when
 # tests are genuinely deleted, and the commit should say which.
 
-tests/api-client.test.ts	34
-tests/api-contract.test.ts	31
-tests/architecture.test.ts	20
+tests/api-client.test.ts	40
+tests/api-contract.test.ts	32
+tests/architecture.test.ts	23
 tests/contract-types.test.ts	7
-tests/format.test.ts	10
+tests/format.test.ts	12
+tests/image-pin.test.ts	7
 tests/money.test.ts	12
 tests/params.test.ts	11
 tests/server-rendering.test.ts	3
