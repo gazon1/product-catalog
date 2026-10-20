@@ -178,8 +178,19 @@ EOF
 # The branch is cut from the base *before* the file is written. A checkout
 # refuses to move when a tracked file it would overwrite has local changes —
 # and writing the pin first is exactly that. The order is the whole trick.
+#
+# The pin's own branch is fetched too, when it exists. The push below is
+# `--force-with-lease`, and a lease is a promise about the branch's current
+# state: it is kept against the remote-tracking ref, and a ref that was never
+# fetched is not a promise the push can keep — the push would be refused with
+# "stale info" on every run after the first. Fetching first makes the lease
+# mean what it says: "replace the branch, but only if it is still the branch I
+# looked at".
 if [[ "$DRY_RUN" != "true" ]]; then
     git fetch origin "$BASE" --quiet
+    if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+        git fetch origin "$BRANCH" --quiet
+    fi
     git checkout -B "$BRANCH" "origin/$BASE"
 fi
 
