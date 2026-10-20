@@ -121,7 +121,12 @@ jobs:
           {
             echo "### The pin and the crawler's main"
             echo ""
-            bash scripts/pin-lag.sh --repo "$CRAWLER_REPO" --ref "$CRAWLER_REF"
+            # A report that could not be produced is a missing report, not a
+            # failed build: it says nothing about the code, and a build that
+            # fails because a report is unavailable teaches people to ignore
+            # the report.
+            bash scripts/pin-lag.sh --repo "$CRAWLER_REPO" --ref "$CRAWLER_REF" \
+              || echo "the report could not be produced"
           } >> "$GITHUB_STEP_SUMMARY"
 
   build-and-push:

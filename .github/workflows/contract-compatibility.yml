@@ -288,6 +288,11 @@ jobs:
           PIN_BRANCH: ${{ vars.PIN_BRANCH || 'chore/pin-crawler-image' }}
           CRAWLER_IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
           CRAWLER_TAG: ${{ inputs.crawler_tag || github.event.client_payload.tag }}
+          # The commit the image was built from. The crawler sends it with the
+          # publication, and the pin records it: a digest says which image is
+          # pinned, and the commit says how far the crawler's main has moved
+          # since it.
+          CRAWLER_COMMIT: ${{ github.event.client_payload.crawler_commit }}
           DISPATCH_ID: ${{ github.event.client_payload.dispatch_id }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -301,7 +306,8 @@ jobs:
           bash scripts/update-image-pin.sh \
             --digest "$CRAWLER_IMAGE" \
             --tag "$CRAWLER_TAG" \
-            --run-id "$RUN_ID" || status=$?
+            --run-id "$RUN_ID" \
+            --crawler-commit "$CRAWLER_COMMIT" || status=$?
           if [ "$status" -eq 1 ]; then
             echo "::notice::the pin does not move for a pull request's image — that is the rule, not a failure"
             exit 0

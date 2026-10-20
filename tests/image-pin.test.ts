@@ -145,6 +145,41 @@ describe('the pin moves only for a release build', () => {  it('refuses a pull r
     // And the real checkout is untouched.
     expect(pinnedImage()).not.toContain(digest);
   });
+
+  it('records the commit its image was built from', () => {
+    // A digest says which image is pinned; the commit says how far the
+    // crawler's main has moved since it. Without the commit the pin's
+    // staleness is invisible — and the report that would show it says so
+    // instead of guessing.
+    const digest = 'c'.repeat(64);
+    const copy = resolve(ROOT, 'build', 'pin-test-commit');
+    execFileSync('bash', ['-c', `rm -rf "${copy}" && mkdir -p "${copy}"`]);
+    execFileSync('bash', ['-c', `cp -r "${ROOT}/contract" "${ROOT}/scripts" "${copy}/"`]);
+
+    const result = runScript(
+      [
+        '--digest',
+        `sha256:${digest}`,
+        '--tag',
+        'abc1234',
+        '--crawler-commit',
+        '4e47af5eb67c',
+        '--dry-run',
+      ],
+      { cwd: copy, root: copy },
+    );
+
+    expect(result.status).toBe(0);
+    const written = readFileSync(resolve(copy, 'contract', 'crawler-image.txt'), 'utf8');
+    expect(written).toContain('# crawler-commit: 4e47af5eb67c');
+    // And the reference is still the first non-comment line — the commit is a
+    // comment beside it, not a line of its own that the reader has to skip.
+    const reference = written
+      .split('\n')
+      .filter((line) => line.trim() && !line.trim().startsWith('#'))
+      .join('\n');
+    expect(reference).toContain(`sha256:${digest}`);
+  });
 });
 
 describe('the pin is checked before it moves', () => {

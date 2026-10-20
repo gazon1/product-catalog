@@ -14,9 +14,9 @@ tests/api-client.test.ts	49
 tests/api-contract.test.ts	32
 tests/architecture.test.ts	23
 tests/contract-types.test.ts	7
-tests/dependabot-bump.test.ts	6
+tests/dependabot-bump.test.ts	7
 tests/format.test.ts	12
-tests/image-pin.test.ts	10
+tests/image-pin.test.ts	11
 tests/money.test.ts	12
 tests/params.test.ts	11
 tests/server-rendering.test.ts	3
