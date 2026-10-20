@@ -50,6 +50,14 @@ on:
         required: false
         default: main
         type: string
+      crawler_tag:
+        description: >-
+          The tag of the build the image came from. A `pr-<n>` tag is refused:
+          a pull request's image is never the deployed one, because the merge
+          rebuilds it.
+        required: false
+        default: manual
+        type: string
 
 permissions:
   contents: read
@@ -185,6 +193,14 @@ jobs:
   # two different images with two different digests — the merge rebuilds. A pin
   # that named the pull request's digest would name an image that is never
   # deployed. The script refuses a `pr-<n>` tag for exactly that reason.
+  #
+  # ## The two ways in
+  #
+  # A dispatch from the crawler carries the image it published and the tag of
+  # the build it came from — nothing to say. A manual run carries the image the
+  # operator named, and the tag they named with it: the operator takes
+  # responsibility for saying that the image is a release build, and the script
+  # still refuses a pull request's tag.
   pin:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -192,9 +208,15 @@ jobs:
     # A dispatch from the crawler carries the image it published; a manual run
     # carries the image the operator named. Either way the pin needs a digest.
     if: >-
-      github.event_name == 'repository_dispatch' &&
-      startsWith(github.event.client_payload.crawler_image, 'ghcr.io/') &&
-      contains(github.event.client_payload.crawler_image, '@sha256:')
+      (
+        github.event_name == 'repository_dispatch' &&
+        startsWith(github.event.client_payload.crawler_image, 'ghcr.io/') &&
+        contains(github.event.client_payload.crawler_image, '@sha256:')
+      ) || (
+        github.event_name == 'workflow_dispatch' &&
+        startsWith(inputs.crawler_image, 'ghcr.io/') &&
+        contains(inputs.crawler_image, '@sha256:')
+      )
     permissions:
       contents: write
       pull-requests: write
@@ -207,8 +229,8 @@ jobs:
       - name: Move the pin, in a pull request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CRAWLER_IMAGE: ${{ github.event.client_payload.crawler_image }}
-          CRAWLER_TAG: ${{ github.event.client_payload.tag }}
+          CRAWLER_IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
+          CRAWLER_TAG: ${{ inputs.crawler_tag || github.event.client_payload.tag }}
           DISPATCH_ID: ${{ github.event.client_payload.dispatch_id }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -224,7 +246,7 @@ jobs:
           {
             echo "### Image pin"
             echo ""
-            echo "- Crawler image: \`${{ github.event.client_payload.crawler_image }}\`"
+            echo "- Crawler image: \`${{ inputs.crawler_image || github.event.client_payload.crawler_image }}\`"
             echo "- Compatibility run: \`${{ github.run_id }}\`"
             echo "- Dispatch id: \`${{ github.event.client_payload.dispatch_id }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
