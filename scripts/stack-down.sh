@@ -58,8 +58,10 @@ die()  { printf '\033[0;31m  ❌ %s\033[0m\n' "$1" >&2; exit 1; }
 # made a healthy storefront look like a recycled PID, so the group kill was
 # skipped and only the port-holder fallback stopped it. `next-server` is the
 # child that actually binds :3000; clear_port deals with that one.
+#
+# The crawler has no entry here: it is a container, and a container is stopped
+# by its runtime rather than by a signal.
 SITE_MATCH="run dev"
-PARSER_MATCH="app.jar"
 
 # Signal a process group, escalating to SIGKILL only if SIGTERM is ignored.
 #
@@ -111,7 +113,18 @@ stop_group() {
 # ---- crawler ----------------------------------------------------------------
 
 step "Crawler"
-stop_group "$STACK_DIR/parser.pid" "$PARSER_MATCH" "crawler"
+# The crawler is a container now, not a process on the host: it is the crawler's
+# own image, the same artifact that is deployed. `docker compose stop` is how
+# it stops; there is no pidfile to signal and no process group to worry about.
+#
+# A crawler left running holds pooled connections to the dev database, so it is
+# stopped before the database.
+if docker ps --format '{{.Names}}' | grep -qx "product-catalog-dev-parser"; then
+    (cd "$ROOT" && docker compose -f docker-compose.dev.yml stop wb-parser >/dev/null)
+    ok "crawler stopped"
+else
+    warn "crawler not running"
+fi
 
 # ---- storefront -------------------------------------------------------------
 
@@ -144,7 +157,6 @@ clear_port() {
 }
 
 clear_port "${STACK_SITE_PORT:-3000}" "$SITE_MATCH\|next-server" "the storefront"
-clear_port "${STACK_PARSER_PORT:-8090}" "$PARSER_MATCH" "the crawler"
 
 # ---- database ---------------------------------------------------------------
 

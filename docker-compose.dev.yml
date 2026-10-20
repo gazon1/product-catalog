@@ -1,12 +1,17 @@
-# Local development: the site plus a disposable PostgreSQL seeded with synthetic
-# data.
+# Local development: the crawler's catalog API, the storefront, and the database
+# behind them.
 #
-# This is the ONLY place the schema is created. The database lives in a container
-# with no published port — the site reaches it over the compose network, so a dev
-# database is not one `psql` away from anything else on the machine.
+# There is no schema in this repository any more. The crawler creates it — it
+# applies its own Flyway migrations and seeds it with its own synthetic data —
+# and the storefront reads it over HTTP. The storefront has no database
+# credentials, so it cannot drift from the schema: it never sees the schema.
 #
-#   just db-up      # start the database and apply migrations + seed
-#   just dev        # next dev on :3000
+#   just stack-up   # database, crawler and storefront
+#   just dev       # next dev on :3000 against an already running stack
+#
+# The database publishes no port. It is reachable from this compose network and
+# from nowhere else, so a development database is not one `psql` away from
+# anything else on the machine.
 
 services:
   db:
@@ -20,35 +25,72 @@ services:
       # container as it does on the production machine. 'C' is the only locale
       # available in the slim image.
       POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
-    # Alphabetical order — 01-…, 02-…, 99-seed.sql. The postgres entrypoint runs
-    # these exactly once, when the data directory is first created. Changing a
-    # file here does nothing on an existing volume; `just db-reset` is the reset.
     volumes:
-      - ./dev/db:/docker-entrypoint-initdb.d:ro
       - product-catalog-dev-data:/var/lib/postgresql/data
-    # Published on loopback only, so `psql` can inspect the dev data. The app
-    # itself reaches the database over the compose network by service name; this
-    # mapping exists for humans, and binding it to 0.0.0.0 would expose the
-    # database to the local network with the credentials written above.
-    ports:
-      - "127.0.0.1:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U catalog -d product_catalog"]
       interval: 3s
       timeout: 3s
       retries: 20
 
+  wb-parser:
+    # The crawler's own image, built by `just app::docker-build` in the crawler
+    # repository. Point STACK_PARSER_IMAGE at another image to run the stack
+    # against a different build.
+    image: ${STACK_PARSER_IMAGE:-wb-parser:local}
+    container_name: product-catalog-dev-parser
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8080"
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: product_catalog
+      DB_USER: catalog
+      DB_PASSWORD: catalog
+      # The crawler creates the schema itself. The storefront applies no SQL.
+      SPRING_FLYWAY_ENABLED: "true"
+      # The demo profile and the demo seed: the crawler fills the database with
+      # its own synthetic data. The seed is guarded by five barriers, and a
+      # fresh, empty database satisfies all five.
+      SPRING_PROFILES_ACTIVE: demo
+      CATALOG_DEMO_SEED_ENABLED: "true"
+      CATALOG_DEMO_DB_USER: wb_demo_seed
+      CATALOG_DEMO_DB_PASSWORD: ${STACK_DEMO_SEED_PASSWORD:-local-dev-demo-seed-password}
+      CATALOG_DEMO_EXPECTED_ROLE: wb_demo_seed
+      CATALOG_DEMO_DB_ID: product-catalog-dev
+      # The catalog's read-only role. The crawler provisions it as part of the
+      # demo bootstrap, with the same script an operator runs by hand.
+      CATALOG_DB_USER: wb_catalog_ro
+      CATALOG_DB_PASSWORD: ${STACK_CATALOG_ROLE_PASSWORD:-local-dev-catalog-role-password}
+      # The key the storefront reads with. A separate secret from the admin
+      # key, and the catalog does not accept the admin one.
+      CATALOG_API_KEY: ${STACK_CATALOG_API_KEY:-local-dev-catalog-key}
+      ADMIN_API_KEY: ${STACK_ADMIN_API_KEY:-local-dev-admin-key}
+      ADMIN_PASSWORD: ${STACK_ADMIN_PASSWORD:-local-dev-admin}
+      # No crawling in the development stack: the data comes from the seed, and
+      # a crawler walking Wildberries would make it move under the assertions.
+      CRAWLER_WORKER_ENABLED: "false"
+    # Published on loopback only, so a human can curl the catalog API. The
+    # storefront reaches it over the compose network, by service name.
+    ports:
+      - "127.0.0.1:8080:8080"
+
   web:
     build:
       context: .
     container_name: product-catalog-dev
     depends_on:
-      db:
-        condition: service_healthy
+      wb-parser:
+        condition: service_started
     environment:
       NODE_ENV: development
       PORT: "3000"
-      DATABASE_URL: postgresql://catalog:catalog@db:5432/product_catalog
+      # The crawler's catalog API. The storefront never sees a database
+      # connection string, and it cannot write — it holds a key and reads.
+      CRAWLER_API_URL: http://wb-parser:8080
+      CRAWLER_API_KEY: ${STACK_CATALOG_API_KEY:-local-dev-catalog-key}
       NEXT_PUBLIC_SITE_URL: http://localhost:3000
       NEXT_TELEMETRY_DISABLED: "1"
     ports:

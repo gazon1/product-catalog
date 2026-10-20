@@ -1,0 +1,31 @@
+# The crawler image the contract test runs against.
+#
+# The reference is the crawler's own production image, built by
+# `just app::docker-build` in the crawler repository (that recipe tags the
+# image `wb-parser:<tag>`, and `local` is its default tag).
+#
+# The contract test resolves this reference to an image id and compares it
+# with the id of the image the container it started actually runs. A test that
+# silently ran against some other local tag would prove nothing about the
+# image the pin names.
+#
+# Two arrangements, one pin.
+#
+#   - A local tag (`wb-parser:local`) is built from the crawler's checkout
+#     beside this one. This is the arrangement that works before the crawler
+#     publishes an image that carries the catalog API.
+#
+#   - A digest (`ghcr.io/<owner>/wb-parser@sha256:...`) is pulled from the
+#     registry, and the container that runs is checked to be exactly that
+#     image. This is the arrangement for a release: a tag can be moved and a
+#     digest cannot, so the check names one image and not whatever the tag
+#     points at when it is pulled.
+#
+# The CI reads this file and decides which of the two to use — nothing else
+# does. Switching to the digest arrangement is a one-line change here, once
+# the crawler has published an image with the API in it.
+#
+# Point the suite at another image without editing this file:
+#
+#   CONTRACT_CRAWLER_IMAGE=wb-parser:local npm test
+wb-parser:local

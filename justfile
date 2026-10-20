@@ -17,37 +17,39 @@ default:
 # ==============================================================================
 # Local development
 # ==============================================================================
-[doc('Start the dev database (migrations + synthetic seed)')]
+[doc('Start the crawler and its database (the crawler creates the schema and seeds it)')]
 db-up:
-    docker compose -f docker-compose.dev.yml up -d db
+    docker compose -f docker-compose.dev.yml up -d db wb-parser
     @# Reuses the same definition of "healthy" as the deploy workflow, rather
     @# than a second inline check that could drift from it.
     @bash scripts/wait-healthy.sh product-catalog-dev-db 120
+    @# Readiness is the crawler's own statement that the catalog can be served:
+    @# its pool runs a statement and the columns it reads are there.
+    @bash scripts/wait-catalog-ready.sh 240
 
-[doc('Drop and recreate the dev database from scratch')]
+[doc('Drop and recreate the dev database and the crawler from scratch')]
 db-reset:
-    # The postgres entrypoint runs /docker-entrypoint-initdb.d exactly once, when
-    # the data directory is first created. Changing a migration or the seed does
-    # nothing to an existing volume — this is the only way to re-apply them.
+    # The crawler's migrations and its seed are applied by the crawler itself, on
+    # every start. Only the volume has to go for a clean database.
     docker compose -f docker-compose.dev.yml down -v
-    docker compose -f docker-compose.dev.yml up -d db
-    @# Reuses the same definition of "healthy" as the deploy workflow, rather
-    @# than a second inline check that could drift from it.
+    docker compose -f docker-compose.dev.yml up -d db wb-parser
     @bash scripts/wait-healthy.sh product-catalog-dev-db 120
+    @bash scripts/wait-catalog-ready.sh 240
 
-[doc('Stop the dev database')]
+[doc('Stop the dev database and the crawler')]
 db-down:
     docker compose -f docker-compose.dev.yml down
 
-[doc('Run next dev on :3000 against the dev database')]
+[doc('Run next dev on :3000 against the running crawler')]
 dev:
-    DATABASE_URL=$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- || echo postgresql://catalog:catalog@127.0.0.1:5433/product_catalog) \
+    CRAWLER_API_URL=$(grep -E '^CRAWLER_API_URL=' .env 2>/dev/null | cut -d= -f2- || echo http://localhost:8080) \
+    CRAWLER_API_KEY=$(grep -E '^CRAWLER_API_KEY=' .env 2>/dev/null | cut -d= -f2- || echo local-dev-catalog-key) \
         npm run dev
 
-# The whole stack against ONE database, the way production runs it: the crawler
-# writes `scraped_items`, this storefront reads the same table. Two databases
-# would test a topology nobody deploys. `just stack-down` stops all of it.
-[doc('Bring up dev DB + storefront + crawler against one shared database')]
+# The whole stack, the way production runs it: one database, the crawler that
+# owns it, and this storefront that reads it over HTTP. Two databases would test
+# a topology nobody deploys. `just stack-down` stops all of it.
+[doc('Bring up the crawler + its database + the storefront')]
 stack-up:
     bash scripts/stack-up.sh
 
@@ -58,7 +60,11 @@ stack-down *args:
 # ==============================================================================
 # Database maintenance
 # ==============================================================================
-[doc('Copy the crawler migrations into dev/db/ and regenerate the seed')]
+# The schema copy in dev/db/ is no longer used by anything: the crawler creates
+# the schema itself, and the storefront reads it over HTTP. These two recipes
+# still exist because the copy is the rollback path's, and it is removed only
+# after the production cutover has been observed — not before.
+[doc('Copy the crawler migrations into dev/db/ and regenerate the seed (rollback path; unused by the stack)')]
 schema-sync *args:
     bash scripts/sync-dev-schema.sh {{args}}
 
@@ -73,9 +79,21 @@ schema-check *args:
 typecheck:
     npx tsc --noEmit
 
-[doc('Run the unit, architecture and database tests (requires a working Docker daemon)')]
+[doc('Run the unit, architecture and contract tests (requires a working Docker daemon)')]
 test:
     npx vitest run
+
+[doc('Run only the contract test: the crawler this storefront talks to, against the contract')]
+contract-check:
+    npm run contract-check
+
+[doc('Regenerate the site’s types from the crawler’s contract document')]
+contract-types:
+    npm run contract-types
+
+[doc('Fail when the committed types no longer describe the crawler’s contract document')]
+contract-types-check:
+    npm run contract-types:check
 
 [doc('Fail when a test file did not execute (reads the JUnit XML npm test wrote)')]
 test-runs:
@@ -86,12 +104,22 @@ build:
     npm run build
 
 # Runs the gates that CI runs, so a green local run means a green pipeline.
-# Ordered as CI orders them, not merely by cost: `schema-check` must precede
-# `test`, because the tests apply dev/db/ as their schema and a run against a
-# stale copy proves nothing. `test-runs` must follow `test`, because it reads
-# the XML that run wrote. `build` stays last — it is the expensive one.
-[doc('Everything CI runs: typecheck, schema sync, tests, test-runs, build (needs Docker)')]
-check: typecheck schema-check test test-runs build
+# Ordered as CI orders them, not merely by cost: `contract-check` must precede
+# `test`, because it is the one that proves the crawler this storefront talks to
+# answers what the contract says — and it is also what tells the rest of the
+# suite that there is a crawler to talk to. `test-runs` must follow `test`,
+# because it reads the XML that run wrote. `build` stays last — it is the
+# expensive one.
+#
+# `contract-types-check` comes first after the typecheck: it needs nothing but
+# the contract document, so it says in a second what the rest of the run says
+# in half an hour — and a stale generated file is a failure that is invisible
+# everywhere else.
+#
+# `schema-check` is not here any more: the storefront does not apply dev/db/ as
+# its schema any more, so there is nothing for it to check against a run.
+[doc('Everything CI runs: typecheck, contract types, contract check, tests, test-runs, build (needs Docker and the crawler image)')]
+check: typecheck contract-types-check contract-check test test-runs build
     @echo ""
     @echo "✅ all checks passed"
 

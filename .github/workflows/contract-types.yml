@@ -1,0 +1,100 @@
+name: Contract types
+
+# The storefront's types, checked against the crawler's contract.
+#
+# ## What this gate is for
+#
+# `src/lib/api/types.generated.ts` is generated from the crawler's OpenAPI
+# document and committed, so that the compiler has the shapes without
+# everybody having to run the generator. A committed generated file is worth
+# nothing unless something checks it, and this is that something: it
+# regenerates the file and fails when the result differs from what is
+# committed.
+#
+# The failure it catches is "the contract changed and nobody regenerated the
+# types". It is silent by nature — the compiler is perfectly happy, the site
+# keeps talking to a contract it no longer knows — and it shows up much later,
+# as an `undefined` on a page.
+#
+# ## Why it is a separate workflow
+#
+# The storefront's own CI runs the whole suite, and the suite contains the
+# same gate (`tests/contract-types.test.ts`). This workflow is the fast one:
+# it needs no Docker, no crawler image and no database, and it says in a
+# minute what the suite says in half an hour. It also fails in a place
+# somebody is looking: a pull request that changes the contract document in
+# the crawler repository cannot be fixed by editing the storefront, and the
+# person who has to know that is the one who opened the pull request.
+#
+# ## What fails, and what does not
+#
+# Nothing here skips. If the contract document cannot be read, the gate fails:
+# a check that verified nothing and reported success is the exact defect this
+# repository refuses to accept.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contract-types-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  staleness:
+    runs-on: ubuntu-latest
+    # No image to build and no container to start: the gate is a generator and
+    # a comparison. The generous timeout is for the crawler's checkout.
+    timeout-minutes: 15
+    env:
+      CRAWLER_DIR: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The contract document is the crawler's own, and the storefront keeps no
+      # copy of it — two documents describing the same shapes are two sources
+      # of truth, and the one nobody reads is the one that quietly licenses the
+      # next drift. It is read from the crawler's checkout, which is why the
+      # crawler is checked out beside the storefront.
+      - name: The crawler repository must be known
+        env:
+          CRAWLER_REPO: ${{ vars.CRAWLER_REPO }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CRAWLER_REPO}" ]; then
+            echo "::error::The CRAWLER_REPO repository variable is not set, so the contract" >&2
+            echo "::error::document cannot be read and the staleness gate cannot run." >&2
+            echo "::error::A gate that checks nothing must not pass." >&2
+            exit 1
+          fi
+
+      - name: Check out the crawler as a sibling checkout
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.CRAWLER_REPO }}
+          ref: ${{ vars.CRAWLER_REF || 'main' }}
+          path: ${{ env.CRAWLER_DIR }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      # The gate. It regenerates the types from the contract document and
+      # fails when the result differs from the committed file — with the
+      # difference in the message, and the command that fixes it.
+      - name: The committed types are the ones the contract describes
+        run: npm run contract-types:check
+
+      # The types are only useful if they compile: a generated file that does
+      # not type-check is a broken build wearing a green gate.
+      - name: Typecheck
+        run: npm run typecheck

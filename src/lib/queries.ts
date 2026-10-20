@@ -1,568 +1,289 @@
 /**
- * Every SQL statement this site runs.
+ * Everything the site reads from the catalog.
  *
- * ## Rules this file exists to keep
+ * ## The boundary
  *
- * 1. **No writes, no DDL.** Not one statement here mutates anything. The crawler's
- *    Flyway migrations are the only writer of this schema.
- * 2. **Every caller-supplied value is a bind parameter.** There is no `${}` in any
- *    string that reaches `query()` except the sort clause, and that one is chosen
- *    from a frozen union by `orderByFor()` below — never passed through from a URL.
- * 3. **Columns are named explicitly.** `SELECT *` would couple this site to column
- *    order and would silently keep working after a migration renames a column,
- *    which is exactly when you want it to fail.
+ * The crawler owns the database and the only way into it is its read-only HTTP
+ * API. This file is the storefront's side of that boundary: it turns the
+ * site's own vocabulary (a filter, a sort, a page) into a request, and turns
+ * the answer back into the shapes the pages render.
+ *
+ * There is no SQL here any more, and there is no connection string, and there
+ * is no driver. That is the whole point of the change: a storefront that
+ * cannot open a database connection cannot break the crawler's schema, cannot
+ * accidentally write to it, and cannot keep working when the crawler's
+ * migrations rename a column.
+ *
+ * ## What the site still owns
+ *
+ * Two things, and they are the two that the API cannot decide for us:
+ *
+ *   - the **sort vocabulary** — the names in `?sort=` are the site's own URLs,
+ *     so the site checks them before they travel (`src/lib/api/sort.ts`);
+ *   - the **title fallback** — the contract promises a non-empty title, but a
+ *     card without a title cannot be rendered as a link, and an empty anchor is
+ *     invisible, so the site keeps its own placeholder.
+ *
+ * Everything else — the schema, the units inside the database, the SQL, the
+ * escaping of a search term — belongs to the crawler.
+ *
+ * ## The units
+ *
+ * `priceKopecks` and `salePriceKopecks` are kopecks, because that is what the
+ * crawler stores. `cashbackRubles` is rubles, because the crawler's writer
+ * already converts kopecks to rubles before storing them: the value passes
+ * through unchanged, and dividing it by 100 here would turn a 500 ₽ cashback
+ * into 5 ₽. The price *filters* the site sends are rubles too, and the
+ * conversion to kopecks happens exactly once — inside the API.
  */
 
-import { query, queryOne } from './db';
+import { ApiError, apiGet, CONNECT_TIMEOUT_MS, REQUEST_TIMEOUT_MS } from './api/client';
 import {
-  DEFAULT_PAGE_SIZE,
-  DEFAULT_SORT,
-  MAX_PAGE_SIZE,
-  type Paged,
-  type PricePoint,
-  type ProductCard,
-  type ProductDetail,
-  type SortOrder,
-  type TargetSummary,
-} from './types';
-import { toNumber } from './money';
+  buildItemsQuery,
+  buildTopDealsQuery,
+  normalizePaging,
+  type ItemFilter,
+  type Paging,
+} from './api/params';
+import { DEFAULT_PAGE_SIZE, DEFAULT_SORT, type SortOrder } from './api/sort';
+import type {
+  Paged,
+  PricePoint,
+  ProductCard,
+  ProductDetail,
+  SiteStats,
+  TargetSummary,
+} from './api/types';
 
-// ---------------------------------------------------------------------------
-// Shared projections
-// ---------------------------------------------------------------------------
+export { normalizePaging } from './api/params';
+export type { ItemFilter, Paging } from './api/params';
+export type { SiteStats } from './api/types';
 
 /**
- * The card projection. `scraped_at` comes back as a Date (timestamptz) and is
- * normalised to ISO-8601 in `mapCard` so nothing downstream has to guess whether
- * it got a string, a Date or a local-time rendering.
+ * The connect budget for a catalog read.
+ *
+ * The default of three seconds is a *connect* budget: the time to reach the
+ * crawler and start an answer. For a query the answer time is the query time —
+ * the response headers arrive when the SQL finishes — and the crawler is
+ * allowed eight seconds of SQL before its own statement timeout fires. A
+ * three-second budget here would abort work the crawler is allowed to finish,
+ * so a catalog read gets the overall budget instead. The crawler's own
+ * statement timeout stays the real budget; this one only makes sure a request
+ * cannot hang forever.
  */
-const CARD_COLUMNS = `
-  i.id::text                AS id,
-  i.target_id::text         AS target_id,
-  t.name                    AS target_name,
-  i.title,
-  i.price_kopecks,
-  i.sale_price_kopecks,
-  i.brand,
-  i.seller,
-  i.cashback_percent,
-  i.cashback,
-  i.in_stock,
-  i.image_url,
-  i.product_url,
-  i.scraped_at
-`;
+const CATALOG_CONNECT_TIMEOUT_MS = REQUEST_TIMEOUT_MS;
 
-interface CardRow {
-  id: string;
-  target_id: string;
-  target_name: string;
-  title: string | null;
-  price_kopecks: string | number | null;
-  sale_price_kopecks: string | number | null;
-  brand: string | null;
-  seller: string | null;
-  cashback_percent: string | number | null;
-  cashback: string | number | null;
-  in_stock: boolean | null;
-  image_url: string | null;
-  product_url: string;
-  scraped_at: Date | string;
-}
-
-function mapCard(row: CardRow): ProductCard {
+/**
+ * Apply the site's own fallback for a title the API could not provide.
+ *
+ * The contract promises a non-empty title, so this never fires against a
+ * correct API. It stays because a card without a title cannot be rendered as a
+ * link: an empty anchor is invisible, and a page of invisible links is a
+ * broken page. The two layers agree on the placeholder, so the fallback is a
+ * second line of defence rather than a second source of truth.
+ */
+function mapCard(card: ProductCard): ProductCard {
   return {
-    id: row.id,
-    targetId: row.target_id,
-    targetName: row.target_name,
-    // A row with no title still has to render as a link, and an empty anchor is
-    // invisible. The product id is the least-bad fallback and is always present.
-    title: row.title?.trim() || `Товар ${row.id.slice(0, 8)}`,
-    priceKopecks: toNumber(row.price_kopecks),
-    salePriceKopecks: toNumber(row.sale_price_kopecks),
-    brand: row.brand,
-    seller: row.seller,
-    cashbackPercent: toNumber(row.cashback_percent),
-    cashbackRubles: toNumber(row.cashback),
-    inStock: row.in_stock,
-    imageUrl: row.image_url,
-    productUrl: row.product_url,
-    scrapedAt: iso(row.scraped_at),
+    id: card.id,
+    targetId: card.targetId,
+    targetName: card.targetName,
+    title: card.title?.trim() || `Товар ${String(card.id ?? '').slice(0, 8)}`,
+    priceKopecks: card.priceKopecks ?? null,
+    salePriceKopecks: card.salePriceKopecks ?? null,
+    brand: card.brand ?? null,
+    seller: card.seller ?? null,
+    cashbackPercent: card.cashbackPercent ?? null,
+    cashbackRubles: card.cashbackRubles ?? null,
+    inStock: card.inStock ?? null,
+    imageUrl: card.imageUrl ?? null,
+    productUrl: card.productUrl,
+    scrapedAt: card.scrapedAt,
   };
 }
 
-function iso(value: Date | string): string {
-  return value instanceof Date ? value.toISOString() : String(value);
-}
-
-/**
- * Canonical UUID shape, as PostgreSQL's `uuid` type accepts it.
- *
- * Case-insensitive and hyphen-optional, because both are valid input for the
- * type and a visitor who pastes an upper-case id should not get a 404.
- */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// ---------------------------------------------------------------------------
-// Sorting
-// ---------------------------------------------------------------------------
-
-/**
- * ORDER BY fragments, keyed by the `SortOrder` union.
- *
- * The object is `Record<SortOrder, string>` rather than a Map so that adding a
- * member to the union without adding a fragment here is a **compile error**
- * instead of a runtime fallback. Every fragment ends with `i.id` — without a
- * tiebreaker, PostgreSQL may return equal rows in a different order per page,
- * and a paginated list that repeats and drops items is indistinguishable from a
- * bug in the filter.
- */
-const ORDER_BY: Record<SortOrder, string> = {
-  DateDesc: 'i.scraped_at DESC NULLS LAST, i.id',
-  DateAsc: 'i.scraped_at ASC NULLS LAST, i.id',
-  PriceAsc: 'COALESCE(i.sale_price_kopecks, i.price_kopecks) ASC NULLS LAST, i.id',
-  PriceDesc: 'COALESCE(i.sale_price_kopecks, i.price_kopecks) DESC NULLS LAST, i.id',
-  CashbackPercentDesc: 'i.cashback_percent DESC NULLS LAST, i.scraped_at DESC, i.id',
-  CashbackPercentAsc: 'i.cashback_percent ASC NULLS LAST, i.scraped_at DESC, i.id',
-  TitleAsc: 'i.title ASC NULLS LAST, i.id',
-  TitleDesc: 'i.title DESC NULLS LAST, i.id',
-};
-
-/**
- * Exported for the architectural test in tests/architecture.test.ts.
- *
- * The property that matters is not "the strings look safe" but "every fragment
- * is a fixed, closed list of ORDER BY items". The union type above makes that
- * exhaustive at compile time; exporting the map lets a test assert the runtime
- * properties the compiler cannot see — no statement separator, and a total
- * ordering (every fragment ends with a tiebreaker).
- */
-export function orderByFor(sort: SortOrder): string {
-  return ORDER_BY[sort];
-}
-
-/** The full fragment table, for tests that assert properties over every entry. */
-export const ORDER_BY_FRAGMENTS: Readonly<Record<SortOrder, string>> = ORDER_BY;
-
-// ---------------------------------------------------------------------------
-// Filtering + paging
-// ---------------------------------------------------------------------------
-
-export interface ItemFilter {
-  search?: string | undefined;
-  minPriceRubles?: number | undefined;
-  maxPriceRubles?: number | undefined;
-  minCashbackPercent?: number | undefined;
-  inStockOnly?: boolean | undefined;
-}
-
-interface WhereClause {
-  sql: string;
-  params: unknown[];
-}
-
-/**
- * Build the shared WHERE fragment and its bind parameters.
- *
- * Parameters are numbered from 1 with no gaps. An earlier version started the
- * filter at `$2` when a target id was present, on the assumption that something
- * else held `$1` — nothing did, so the query skipped a parameter. It worked,
- * but it made every placeholder number in the file conditional on a flag, and
- * the LIMIT/OFFSET numbering then had to depend on it too, which is precisely
- * how a filter placeholder and a LIMIT placeholder ended up sharing an index and
- * every category page failed with 42804.
- */
-function buildWhere(filter: ItemFilter, targetId?: string): WhereClause {
-  const clauses: string[] = [];
-  const params: unknown[] = [];
-
-  // Resolves the index of the parameter that is *about to be* pushed. Calling
-  // it after the push yields params.length + 1 and shifts every subsequent
-  // placeholder by one — which is how a filter clause ended up on `$2` while
-  // LIMIT was also `$2`, and every search page failed with a datatype mismatch.
-  const next = () => `$${params.length + 1}`;
-
-  if (targetId !== undefined) {
-    const idx = next();
-    params.push(targetId);
-    clauses.push(`i.target_id = ${idx}`);
-  }
-
-  if (filter.search) {
-    const idx = next();
-    params.push(`%${escapeLike(filter.search)}%`);
-    // Title first, then brand/seller: a match in the title is what the user meant,
-    // and OR-ing without parentheses would let the brand clause escape the filter.
-    // The same `$n` is reused three times, which PostgreSQL allows and which is
-    // why it counts as one bound value.
-    clauses.push(`(i.title ILIKE ${idx} OR i.brand ILIKE ${idx} OR i.seller ILIKE ${idx})`);
-  }
-
-  if (filter.minPriceRubles !== undefined && Number.isFinite(filter.minPriceRubles)) {
-    const idx = next();
-    params.push(Math.round(filter.minPriceRubles * 100));
-    clauses.push(`COALESCE(i.sale_price_kopecks, i.price_kopecks) >= ${idx}`);
-  }
-
-  if (filter.maxPriceRubles !== undefined && Number.isFinite(filter.maxPriceRubles)) {
-    const idx = next();
-    params.push(Math.round(filter.maxPriceRubles * 100));
-    clauses.push(`COALESCE(i.sale_price_kopecks, i.price_kopecks) <= ${idx}`);
-  }
-
-  if (filter.minCashbackPercent !== undefined && Number.isFinite(filter.minCashbackPercent)) {
-    const idx = next();
-    params.push(filter.minCashbackPercent);
-    clauses.push(`i.cashback_percent >= ${idx}`);
-  }
-
-  if (filter.inStockOnly) {
-    clauses.push('i.in_stock = true');
-  }
-
+/** One price observation, as the pages read it. */
+function mapPricePoint(point: PricePoint): PricePoint {
   return {
-    sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
-    params,
+    scrapedAt: point.scrapedAt,
+    priceKopecks: point.priceKopecks ?? null,
+    cashbackPercent: point.cashbackPercent ?? null,
+    cashbackRubles: point.cashbackRubles ?? null,
   };
 }
 
 /**
- * `ILIKE` treats `%` and `_` in the user's text as wildcards, so searching for
- * "100%" returns every row. Escaping them makes the search literal, which is what
- * someone typing a product name into a search box expects.
+ * The paged envelope, defensively.
  *
- * The backslash escape is Postgres' default for `LIKE`, and `standard_conforming_strings`
- * is on, so `'\'` is a single backslash in the SQL literal.
+ * The counters are the crawler's, not ours: the crawler knows how many rows
+ * matched before paging, and a second count here would be a second query and a
+ * second chance to disagree with the first.
  */
-function escapeLike(input: string): string {
-  return input.replace(/[\\%_]/g, (ch) => `\\${ch}`);
-}
-
-export interface Paging {
-  page: number;
-  pageSize: number;
-}
-
-/** Clamp user-supplied paging so `?page=-1` and `?pageSize=100000` are not a 500. */
-export function normalizePaging(page: number, pageSize: number): Paging {
+function mapPage<T>(page: Paged<T>): Paged<T> {
   return {
-    page: Number.isFinite(page) ? Math.max(0, Math.floor(page)) : 0,
-    pageSize: Number.isFinite(pageSize)
-      ? Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)))
-      : DEFAULT_PAGE_SIZE,
+    items: page.items ?? [],
+    totalCount: page.totalCount ?? 0,
+    page: page.page ?? 0,
+    pageSize: page.pageSize ?? 0,
+    totalPages: page.totalPages ?? 0,
+    hasNextPage: page.hasNextPage ?? false,
+    hasPrevPage: page.hasPrevPage ?? false,
   };
-}
-
-function paged<T>(items: T[], totalCount: number, paging: Paging): Paged<T> {
-  const totalPages = Math.ceil(totalCount / paging.pageSize);
-  return {
-    items,
-    totalCount,
-    page: paging.page,
-    pageSize: paging.pageSize,
-    totalPages,
-    hasNextPage: paging.page + 1 < totalPages,
-    hasPrevPage: paging.page > 0 && totalCount > 0,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Queries
-// ---------------------------------------------------------------------------
-
-export interface BuiltQuery {
-  text: string;
-  values: unknown[];
 }
 
 /**
- * Build the paginated item query.
+ * A filtered, sorted, paginated page of product cards.
  *
- * Exported so it can be tested without a database — which is the only reason the
- * placeholder numbering below is checkable at all. A collision between a filter
- * placeholder and LIMIT/OFFSET produces `datatype mismatch` from PostgreSQL, not
- * a syntax error, and only on the code paths that bind a target id.
+ * The filter keeps the site's own names; the query string keeps the API's.
+ * The translation happens once, in `src/lib/api/params.ts`.
  */
-export function buildItemListSql(options: {
-  targetId?: string | undefined;
-  filter?: ItemFilter | undefined;
-  sort?: SortOrder | undefined;
-  paging?: Paging | undefined;
-}): BuiltQuery {
-  const sort = options.sort ?? DEFAULT_SORT;
-  const paging = normalizePaging(options.paging?.page ?? 0, options.paging?.pageSize ?? DEFAULT_PAGE_SIZE);
-  const filter = options.filter ?? {};
-
-  // The first bind parameter belongs to the filter, and LIMIT/OFFSET have to be
-  // numbered from *after* it.
-  //
-  // Getting this wrong is a placeholder collision rather than a syntax error:
-  // with only a target id the filter binds `$1` and LIMIT was also written as
-  // `$1`, so Postgres received the target's UUID where it expected an integer
-  // and every category page failed with 42804 (datatype mismatch) — while the
-  // home page, which passes no target id, kept working.
-  const where = buildWhere(filter, options.targetId);
-  const limitIndex = where.params.length + 1;
-  const offsetIndex = limitIndex + 1;
-
-  const text = `SELECT ${CARD_COLUMNS}
-       FROM scraped_items i
-       JOIN crawl_targets t ON t.id = i.target_id
-       ${where.sql}
-      ORDER BY ${orderByFor(sort)}
-      LIMIT $${limitIndex}
-      OFFSET $${offsetIndex}`;
-
-  return {
-    text,
-    values: [...where.params, paging.pageSize, paging.page * paging.pageSize],
-  };
-}
-
 export async function listItems(options: {
   targetId?: string | undefined;
   filter?: ItemFilter | undefined;
   sort?: SortOrder | undefined;
   paging?: Paging | undefined;
 }): Promise<Paged<ProductCard>> {
-  const sort = options.sort ?? DEFAULT_SORT;
-  const paging = normalizePaging(options.paging?.page ?? 0, options.paging?.pageSize ?? DEFAULT_PAGE_SIZE);
-  const filter = options.filter ?? {};
-  const where = buildWhere(filter, options.targetId);
-
-  const built = buildItemListSql(options);
-  const rows = await query<CardRow>(built.text, built.values);
-
-  const countRow = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) AS count
-       FROM scraped_items i
-       JOIN crawl_targets t ON t.id = i.target_id
-       ${where.sql}`,
-    where.params
+  const paging = normalizePaging(
+    options.paging?.page ?? 0,
+    options.paging?.pageSize ?? DEFAULT_PAGE_SIZE,
   );
 
-  return paged(rows.map(mapCard), toNumber(countRow?.count) ?? 0, paging);
+  const query = buildItemsQuery({
+    targetId: options.targetId,
+    filter: options.filter,
+    sort: options.sort ?? DEFAULT_SORT,
+    paging,
+  });
+
+  const page = await apiGet<Paged<ProductCard>>('/items', {
+    query,
+    connectTimeoutMs: CATALOG_CONNECT_TIMEOUT_MS,
+  });
+
+  return { ...mapPage(page), items: (page.items ?? []).map(mapCard) };
 }
 
 /**
  * Every crawl target with its item count.
  *
- * The `LEFT JOIN` + `GROUP BY` is a full pass over `scraped_items` — with the
- * `idx_scraped_items_target_id` index it is an index-only scan per target, which
- * is why this is cached for 10 minutes rather than per request. It is the one
- * query here that does not scale for free, and the honest fix (a maintained
- * counter) would mean writing to this database, which this site does not do.
+ * The API answers with `{ items: [...] }` — the same envelope shape as the
+ * paged lists, without the paging — and the count of a target is the
+ * crawler's aggregate, cached on its side. The site used to compute it with a
+ * `LEFT JOIN` over the whole scraped table, which was the one query here that
+ * did not scale for free.
  */
 export async function listTargets(): Promise<TargetSummary[]> {
-  const rows = await query<{
-    id: string;
-    name: string;
-    root_category_name: string | null;
-    is_active: boolean;
-    item_count: string;
-    newest_scraped_at: Date | string | null;
-  }>(
-    `SELECT t.id::text AS id,
-            t.name,
-            t.root_category_name,
-            t.is_active,
-            COUNT(i.id) AS item_count,
-            MAX(i.scraped_at) AS newest_scraped_at
-       FROM crawl_targets t
-       LEFT JOIN scraped_items i ON i.target_id = t.id
-      GROUP BY t.id, t.name, t.root_category_name, t.is_active
-      ORDER BY t.name ASC`
-  );
-
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    rootCategoryName: r.root_category_name,
-    isActive: r.is_active,
-    itemCount: toNumber(r.item_count) ?? 0,
-    newestScrapedAt: r.newest_scraped_at ? iso(r.newest_scraped_at) : null,
-  }));
+  const body = await apiGet<{ items: TargetSummary[] }>('/targets', {
+    connectTimeoutMs: CATALOG_CONNECT_TIMEOUT_MS,
+  });
+  return body.items ?? [];
 }
 
 /**
  * One product plus its price history.
  *
- * History is keyed on `(target_id, product_id)`, not on the row id: the writer's
- * upsert keeps one row per (target, product, price), so a row id identifies a
- * single price observation and the history of a product is the set of its rows.
- * Rows whose `product_id` is null cannot be grouped this way and get no history
- * — the product page renders the price it has rather than pretending to a series.
+ * ## Why a malformed id is a `null` and not an error
  *
- * ## The id is validated before it reaches the database
+ * The id comes straight from `/product/[id]`. The contract says it is a UUID
+ * and that anything else is a `400`; the crawler used to answer `22P02` from
+ * PostgreSQL, which was a database error page for what is really a typo in a
+ * URL. Both the `400` and the `404` are therefore mapped to `null` here, so a
+ * mistyped id renders the "not found" page instead of an error page.
  *
- * `id` comes straight from `/product/[id]`. PostgreSQL rejects a non-UUID string
- * in a `uuid` comparison with error 22P02 rather than returning no rows, so an
- * unvalidated id turns a typo in a URL into a database error page instead of a
- * 404. Checking the shape costs a regex and turns the whole class of malformed
- * URLs into "not found", which is what they are.
+ * The id is *not* checked locally any more. The crawler owns the shape of its
+ * own identifiers, and a second parser on this side would be a second place to
+ * disagree with it about what a valid id is.
  */
 export async function getProduct(id: string): Promise<ProductDetail | null> {
-  if (!UUID_RE.test(id)) return null;
-
-  const card = await queryOne<CardRow>(
-    `SELECT ${CARD_COLUMNS}
-       FROM scraped_items i
-       JOIN crawl_targets t ON t.id = i.target_id
-      WHERE i.id = $1`,
-    [id]
-  );
-  if (!card) return null;
-
-  const mapped = mapCard(card);
-
-  const productIdRow = await queryOne<{ product_id: string | null }>(
-    'SELECT product_id::text AS product_id FROM scraped_items WHERE id = $1',
-    [id]
-  );
-  const productId = productIdRow?.product_id ?? null;
-
-  if (productId === null) return { ...mapped, history: [] };
-
-  const historyRows = await query<{
-    scraped_at: Date | string;
-    price_kopecks: string | number | null;
-    cashback_percent: string | number | null;
-    cashback: string | number | null;
-  }>(
-    `SELECT scraped_at, price_kopecks, cashback_percent, cashback
-       FROM scraped_items
-      WHERE target_id = $1 AND product_id = $2
-      ORDER BY scraped_at DESC
-      LIMIT 120`,
-    [mapped.targetId, productId]
-  );
-
-  const history: PricePoint[] = historyRows.map((r) => ({
-    scrapedAt: iso(r.scraped_at),
-    priceKopecks: toNumber(r.price_kopecks),
-    cashbackPercent: toNumber(r.cashback_percent),
-    cashbackRubles: toNumber(r.cashback),
-  }));
-
-  return { ...mapped, history };
+  try {
+    const product = await apiGet<ProductDetail>(`/items/${encodeURIComponent(id)}`, {
+      connectTimeoutMs: CATALOG_CONNECT_TIMEOUT_MS,
+    });
+    return {
+      ...mapCard(product),
+      history: (product.history ?? []).map(mapPricePoint),
+    };
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 400 || err.status === 404)) return null;
+    throw err;
+  }
 }
 
 /**
- * Highest cashback across all targets, one row per `match_id`.
+ * The highest cashback across all targets, one row per matched product.
  *
- * `DISTINCT ON` collapses the same product appearing in several targets. Rows
- * with a null `match_id` are excluded: without a stable grouping key the
- * "best deal" list would deduplicate arbitrarily and show the same product twice,
- * which is worse than showing it once per target.
- *
- * ## Why this is wrapped in a subquery
- *
- * `DISTINCT ON (x)` requires `ORDER BY x` first, so the result comes back grouped
- * by `match_id` — *not* by cashback. A page titled "Топ по кэшбэку" that returns
- * its rows in `match_id` order is not a top list, it is a shuffled one. The
- * outer query re-sorts by cashback descending, with `scraped_at` and `id` as
- * tiebreakers so pagination below is stable.
- *
- * That wrapper is also what makes the filter usable: the inner query orders and
- * deduplicates, the outer orders for presentation, and neither can starve the
- * other.
- *
- * The outer query projects `best.*` rather than re-listing CARD_COLUMNS. A typed
- * second copy of the projection is a second place to forget a column: adding one
- * to CARD_COLUMNS would make `listItems` return it and `listTopDeals` silently
- * drop it, and no test in this repository would fail on that. The subquery
- * already exposes exactly the card projection, so the outer query forwards it.
+ * The deduplication is the crawler's business: it knows which rows describe
+ * the same product, and it collapses them to their best observation. The site
+ * used to do it with `DISTINCT ON (match_id)`, wrapped in a subquery because
+ * `DISTINCT ON` orders by the grouping key and a "top by cashback" list that
+ * comes back in `match_id` order is not a top list.
  */
 export async function listTopDeals(options: {
   minCashbackPercent?: number | undefined;
   paging?: Paging | undefined;
 }): Promise<Paged<ProductCard>> {
-  const paging = normalizePaging(options.paging?.page ?? 0, options.paging?.pageSize ?? DEFAULT_PAGE_SIZE);
-  const params: unknown[] = [];
-  let filterSql = '';
-  if (options.minCashbackPercent !== undefined && Number.isFinite(options.minCashbackPercent)) {
-    params.push(options.minCashbackPercent);
-    // Aliased `i` to match the FROM below. This was `s`, left over from an
-    // earlier self-join: with the filter unset the empty string hid the typo, so
-    // `/top-deals` worked and `/top-deals?minCashback=10` failed with
-    // "missing FROM-clause entry for table s" on every request.
-    filterSql = `AND i.cashback_percent >= $${params.length}`;
-  }
-
-  const rows = await query<CardRow & { match_id: string }>(
-    `SELECT best.*
-       FROM (
-              SELECT DISTINCT ON (i.match_id)
-                     ${CARD_COLUMNS},
-                     i.match_id::text AS match_id
-                FROM scraped_items i
-                JOIN crawl_targets t ON t.id = i.target_id
-               WHERE i.match_id IS NOT NULL
-                 ${filterSql}
-               ORDER BY i.match_id, i.cashback_percent DESC NULLS LAST, i.scraped_at DESC
-            ) AS best
-      ORDER BY best.cashback_percent DESC NULLS LAST, best.scraped_at DESC, best.id`,
-    params
+  const paging = normalizePaging(
+    options.paging?.page ?? 0,
+    options.paging?.pageSize ?? DEFAULT_PAGE_SIZE,
   );
 
-  // DISTINCT ON cannot be paginated in SQL without wrapping it in a subquery and
-  // re-sorting, and the dataset is the deduplicated set of all crawled products.
-  // The slice happens here; at the crawler's scale this stays in memory.
-  const all = rows.map(mapCard);
-  const totalCount = all.length;
-  const start = paging.page * paging.pageSize;
-  const items = all.slice(start, start + paging.pageSize);
+  const query = buildTopDealsQuery({
+    minCashbackPercent: options.minCashbackPercent,
+    paging,
+  });
 
-  return paged(items, totalCount, paging);
+  const page = await apiGet<Paged<ProductCard>>('/top-deals', {
+    query,
+    connectTimeoutMs: CATALOG_CONNECT_TIMEOUT_MS,
+  });
+
+  return { ...mapPage(page), items: (page.items ?? []).map(mapCard) };
 }
 
-export interface SiteStats {
-  totalItems: number;
-  totalTargets: number;
-  newestScrapedAt: string | null;
-  withCashback: number;
-}
-
+/** Aggregate counters for the whole catalog. */
 export async function getSiteStats(): Promise<SiteStats> {
-  const row = await queryOne<{
-    total_items: string;
-    total_targets: string;
-    newest_scraped_at: Date | string | null;
-    with_cashback: string;
-  }>(
-    `SELECT (SELECT COUNT(*) FROM scraped_items)                       AS total_items,
-            (SELECT COUNT(*) FROM crawl_targets)                      AS total_targets,
-            (SELECT MAX(scraped_at) FROM scraped_items)                AS newest_scraped_at,
-            (SELECT COUNT(*) FROM scraped_items WHERE cashback_percent IS NOT NULL) AS with_cashback`
-  );
+  const stats = await apiGet<SiteStats>('/stats', {
+    connectTimeoutMs: CATALOG_CONNECT_TIMEOUT_MS,
+  });
 
   return {
-    totalItems: toNumber(row?.total_items) ?? 0,
-    totalTargets: toNumber(row?.total_targets) ?? 0,
-    newestScrapedAt: row?.newest_scraped_at ? iso(row.newest_scraped_at) : null,
-    withCashback: toNumber(row?.with_cashback) ?? 0,
+    totalItems: stats.totalItems ?? 0,
+    totalTargets: stats.totalTargets ?? 0,
+    newestScrapedAt: stats.newestScrapedAt ?? null,
+    withCashback: stats.withCashback ?? 0,
   };
 }
 
 /**
- * Cheap liveness probe: proves the connection works AND that the crawler's
- * tables are visible.
+ * Is the catalog ready to be served?
  *
- * It has to name a table. `SELECT 1` answers "is Postgres reachable", which is
- * a different question from "can this site render anything" — and the second
- * one is the one the deploy smoke test is relying on. Against a database that
- * exists but is missing `scraped_items`, `SELECT 1` returns 200, the healthcheck
- * goes green and every page 500s: a successful rollout of a broken site.
+ * The answer comes from the crawler's own readiness probe, which checks that
+ * its pool can execute a statement *and* that the columns the catalog reads
+ * are present. The site used to answer this question with `SELECT 1 FROM
+ * scraped_items LIMIT 1`, which is a weaker question: it says the table is
+ * there, not that the columns the queries name are.
  *
- * LIMIT 1 keeps it a probe rather than a count over the whole table.
+ * A readiness probe that takes longer than the connect budget is a failed
+ * readiness probe, not a slow one: the crawler documents the check as cheap on
+ * purpose, because the deploy gate, the container health check and the
+ * storefront all call it.
+ *
+ * This never throws. A health check that throws is a health check that takes
+ * the process down with it.
  */
 export async function ping(): Promise<boolean> {
   try {
-    await query('SELECT 1 FROM scraped_items LIMIT 1');
+    // A 2xx answer is the only way out of `apiGet`, so reaching the `return`
+    // means the readiness probe answered 200.
+    await apiGet<{ status: string }>('/ready', {
+      timeoutMs: CONNECT_TIMEOUT_MS,
+      connectTimeoutMs: CONNECT_TIMEOUT_MS,
+    });
     return true;
   } catch (err) {
-    console.error('[db] ping failed', err);
+    // The message is already redacted by the client; the whole error object is
+    // not logged, because a `cause` is not ours to vouch for.
+    const detail = err instanceof Error ? err.message : 'unknown error';
+    console.error('[api] the catalog is not ready:', detail);
     return false;
   }
 }

@@ -36,21 +36,31 @@ describe('plural', () => {
 });
 
 describe('describe', () => {
-  it('names a missing DATABASE_URL', () => {
-    expect(describeError(new Error('DATABASE_URL is not set'))).toMatch(/DATABASE_URL/);
+  it('names a missing catalog API address', () => {
+    expect(describeError(new Error('CRAWLER_API_URL is not set.'))).toMatch(/CRAWLER_API_URL/);
   });
 
-  it('reports an unreachable database as such', () => {
-    expect(describeError(new Error('connect ECONNREFUSED 127.0.0.1:5432'))).toMatch(
-      /недоступна/
+  it('names a missing catalog API key', () => {
+    expect(describeError(new Error('CRAWLER_API_KEY is not set.'))).toMatch(/CRAWLER_API_KEY/);
+  });
+
+  it('reports an unreachable catalog API as such', () => {
+    expect(describeError(new Error('the catalog API is unreachable for /items'))).toMatch(
+      /недоступно/
     );
-    expect(describeError(new Error('timeout exceeded'))).toMatch(/недоступна/);
+    expect(describeError(new Error('timeout exceeded'))).toMatch(/недоступно/);
   });
 
-  it('reports a rejected credential', () => {
-    expect(
-      describeError(new Error('password authentication failed for user "catalog"'))
-    ).toMatch(/отклонила/);
+  it('reports a refused key', () => {
+    expect(describeError(new Error('the catalog API answered 401 for /items'))).toMatch(
+      /отклонило ключ/
+    );
+  });
+
+  it('reports a catalog that cannot be served', () => {
+    expect(describeError(new Error('the catalog API answered 503 for /items'))).toMatch(
+      /временно недоступен/
+    );
   });
 
   it('does not leak driver detail into the page', () => {

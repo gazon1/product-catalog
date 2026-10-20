@@ -17,9 +17,10 @@ jobs:
   # fail in seconds instead.
   typecheck-and-test:
     runs-on: ubuntu-latest
-    # Generous enough for a cold postgres:16-alpine pull plus the suite. The
-    # previous 15 was sized when `npm test` opened no sockets at all.
-    timeout-minutes: 25
+    # Generous enough for a cold crawler image build — a full Kotlin compile —
+    # plus the suite, which starts the image and waits for it to migrate and
+    # seed itself.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -60,22 +61,40 @@ jobs:
         env:
           CRAWLER_DIR: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
 
-      # `npm test` needs a working Docker daemon: tests/database.test.ts starts a
-      # postgres:16-alpine container, applies the crawler migrations above and
-      # runs the real listItems / getProduct / listTopDeals against them. This is
-      # the check that notices a crawler migration breaking the storefront's
-      # queries — nothing else in either repository would.
+      # The contract test runs against a REAL crawler: it starts the crawler's
+      # image, lets it create its own schema and seed itself, and validates every
+      # answer against the contract document. Nothing else in either repository
+      # can catch a crawler that answers with a different shape than the storefront
+      # expects — the storefront used to find that out in production, on a page.
+      #
+      # Two arrangements, one pin. A pin that names a digest is pulled from the
+      # registry: the image is exactly the one the digest names, and the suite
+      # checks that the container it started runs that image and not some other
+      # one. A pin that names a local tag is built from the crawler's checkout
+      # beside this one — the arrangement that works before the crawler
+      # publishes an image with the API in it. The pin decides which, and
+      # nothing else does.
       #
       # Docker missing is a hard failure, never a skip. `ubuntu-latest` provides
       # it; a self-hosted runner without it must fail and say so rather than
-      # report a passing suite while the tests that touch Postgres never ran.
-      #
-      # Pulling the image here rather than letting testcontainers do it keeps the
-      # timeout spent on the pull out of the test run itself.
-      - name: Pull the test database image
-        run: docker pull postgres:16-alpine
+      # report a passing suite while the tests that need the crawler never ran.
+      - name: Provide the crawler image
+        env:
+          CRAWLER_DIR: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="$(grep -vE '^\s*(#|$)' contract/crawler-image.txt | head -1)"
+          if [[ "$image" == *@sha256:* ]]; then
+            if [ -n "${GHCR_READ_TOKEN:-}" ]; then
+              echo "$GHCR_READ_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+            fi
+            docker pull "$image"
+          else
+            docker build --file "$CRAWLER_DIR/Dockerfile.app" --tag "$image" "$CRAWLER_DIR"
+          fi
 
-      - name: Unit, architecture and database tests
+      - name: Unit, architecture and contract tests
         run: npm test
 
   build-and-push:
@@ -111,11 +130,11 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=pr
 
-      # `DATABASE_URL` is deliberately absent. The build must not depend on a
-      # database existing — that is the bug this project already hit once, where
-      # a build-time render baked an empty catalogue into the image. Every route
-      # that reads data is `force-dynamic` or on-demand ISR precisely so this
-      # build is safe with no database at all.
+      # `CRAWLER_API_URL` and `CRAWLER_API_KEY` are deliberately absent. The
+      # build must not depend on the catalog being reachable — that is the bug this
+      # project already hit once, where a build-time render baked an empty
+      # catalogue into the image. Every route that reads data is `force-dynamic`
+      # or on-demand ISR precisely so this build is safe with no catalog at all.
       - name: Build and push
         id: build
         uses: docker/build-push-action@v6

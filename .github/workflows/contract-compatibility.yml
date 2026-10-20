@@ -1,0 +1,164 @@
+name: Contract compatibility
+
+# The storefront checked against a crawler image that somebody else built.
+#
+# ## Why this is a separate workflow
+#
+# The storefront's own CI checks the crawler image it can build from a sibling
+# checkout. That is a good check, and it is not the one that matters: the image
+# that matters is the one the crawler published, because that is the one that
+# will be deployed. When the crawler publishes an image, it dispatches this
+# workflow, which runs the storefront's contract test against that exact image
+# and reports its conclusion back to the crawler.
+#
+# The two repositories are separate, and a contract that only one of them
+# checks is a contract nobody checks.
+#
+# ## What identifies a run
+#
+# A run is identified by three things together: the crawler's image digest, the
+# site's commit SHA, and the id of this workflow's run. The dispatch carries a
+# `dispatch_id`, and this workflow prints it and puts it in the name of the
+# artifact — so the crawler can match *this* answer to *its* question, rather
+# than to "the last green run", which may have been about another image.
+#
+# The site's SHA is recorded and printed for the same reason: a run against a
+# site commit that nobody asked for is not an answer to anything.
+#
+# ## What fails, and what does not
+#
+# The contract test starts the crawler image and validates every live answer
+# against the contract document the crawler itself serves. A missing image, a
+# crawler that will not start, an answer with a different shape — each of them
+# fails this workflow. Nothing here skips: a green run that checked nothing is
+# the failure mode this repository refuses.
+
+on:
+  repository_dispatch:
+    types: [crawler-image-published]
+  workflow_dispatch:
+    inputs:
+      crawler_image:
+        description: >-
+          The crawler image to check against — a digest, or a reference the
+          runner can pull. Required: a check against an unnamed image proves
+          nothing.
+        required: true
+        type: string
+      site_ref:
+        description: The storefront ref to check.
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contract-compatibility-${{ inputs.site_ref || github.event.client_payload.site_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    # The crawler image has to be built or pulled, the crawler has to migrate
+    # and seed itself, and the suite walks the whole catalog.
+    timeout-minutes: 45
+    env:
+      CRAWLER_DIR: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
+      DISPATCH_ID: ${{ github.event.client_payload.dispatch_id || inputs.dispatch_id || 'manual' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.site_ref || github.event.client_payload.site_ref || github.ref }}
+
+      # The site's commit is part of the run's identity: it is recorded, printed
+      # and returned, so that the crawler can check that the answer it received
+      # is about the site it asked about.
+      - name: Record the site's commit
+        run: |
+          set -euo pipefail
+          echo "SITE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "site commit: $SITE_SHA"
+          echo "dispatch id:  $DISPATCH_ID"
+
+      # The contract document is the crawler's own, and the storefront keeps no
+      # copy of it — two documents describing the same shapes are two sources of
+      # truth. It is read from the crawler's checkout, which is why the crawler
+      # is checked out beside the storefront.
+      - name: Check out the crawler as a sibling checkout
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.CRAWLER_REPO }}
+          ref: ${{ vars.CRAWLER_REF || 'main' }}
+          path: ${{ env.CRAWLER_DIR }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      # A registry image has to be pulled before the suite can start it: the
+      # suite resolves the image reference to an image id and compares it with
+      # the id of the container it actually started, and an image that is not
+      # on the machine has no id.
+      #
+      # The login is optional — a public package needs none — and it is skipped
+      # when the token is absent rather than failing, because a package that is
+      # public does not need a secret to be pulled.
+      #
+      # A local tag is built from the crawler's checkout beside this one. The
+      # dispatcher names the image it published, which is a registry reference;
+      # the tag is the arrangement that works before the crawler publishes one.
+      - name: Provide the crawler image
+        env:
+          IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="${IMAGE:-}"
+          if [ -z "$image" ]; then
+            echo "::error::no crawler image was named — a check against an unnamed image proves nothing."
+            exit 1
+          fi
+          if [[ "$image" == *@sha256:* ]]; then
+            if [ -n "${GHCR_READ_TOKEN:-}" ]; then
+              echo "$GHCR_READ_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+            fi
+            docker pull "$image"
+          else
+            docker build --file "$CRAWLER_DIR/Dockerfile.app" --tag "$image" "$CRAWLER_DIR"
+          fi
+
+      # The suite applies no SQL of its own: it starts the crawler, lets it
+      # migrate and seed itself, and talks to it over HTTP.
+      - name: Check the storefront against the crawler image
+        env:
+          CONTRACT_CRAWLER_IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
+        run: npm run contract-check
+
+      # The reports are named after the dispatch, so that the crawler's question
+      # and this answer are joined by a name and not by a timestamp.
+      - name: Upload the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-report-${{ env.DISPATCH_ID }}
+          path: build/test-results/**
+
+      # The dispatch id and the site's commit are printed again at the end: the
+      # crawler reads them from the run's log when it correlates the answer.
+      - name: The identity of this run
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### Contract compatibility"
+            echo ""
+            echo "- Crawler image: \`${{ inputs.crawler_image || github.event.client_payload.crawler_image }}\`"
+            echo "- Site commit: \`$SITE_SHA\`"
+            echo "- Dispatch id: \`$DISPATCH_ID\`"
+            echo "- Run id: \`${{ github.run_id }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
