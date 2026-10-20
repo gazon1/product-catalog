@@ -3,9 +3,12 @@ const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
 
-  // The storefront never proxies to an API server: it reads Postgres directly
-  // under a SELECT-only role. There is nothing to rewrite, and the previous
-  // solution's `/api/*` dev rewrite existed only to reach its ASP.NET backend.
+  // The storefront talks to the crawler's catalog API server-side, from the
+  // Node runtime, over the internal network — the browser never sees it and
+  // the site never proxies to it. So there is nothing to rewrite: the
+  // previous solution's `/api/*` dev rewrite existed only to reach its
+  // ASP.NET backend, and adding one now would expose the crawler's API (and
+  // its key) to the public internet.
   async rewrites() {
     return [];
   },
