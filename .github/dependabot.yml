@@ -1,0 +1,41 @@
+# Dependency updates.
+#
+# The storefront's dependencies are the ones the storefront is built on: a
+# patch of React or Next.js cannot change the meaning of a page — the build
+# and the contract tests decide that — and a major can move APIs under the
+# code. So patch and minor travel together in one pull request that a machine
+# may merge once the gates are green, and a major waits for a person.
+#
+# The auto-merge that reads the bump out of the pull request's description is
+# .github/workflows/dependabot-auto-merge.yml, and the script it uses is
+# scripts/dependabot_bump.py.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      patch-and-minor:
+        update-types:
+          - "patch"
+          - "minor"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+    groups:
+      patch-and-minor:
+        update-types:
+          - "patch"
+          - "minor"

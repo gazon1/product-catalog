@@ -102,6 +102,28 @@ jobs:
       - name: Unit, architecture and contract tests
         run: npm test
 
+      # How far the pin is behind the crawler's main.
+      #
+      # The pin names an image by digest — the image that was checked is the
+      # image that gets deployed — but a digest says nothing about when that
+      # image was built. A storefront pinned to an image that is three
+      # crawler's releases old looks exactly like one that is current.
+      #
+      # This is a report, not a gate: the storefront adapts to the crawler
+      # after the crawler moves, so a lag is the normal state between a
+      # crawler's release and the storefront's next one.
+      - name: How far the pin is behind the crawler's main
+        env:
+          CRAWLER_REPO: ${{ vars.CRAWLER_REPO || 'gazon1/wb-parser-kotlin-new' }}
+          CRAWLER_REF: ${{ vars.CRAWLER_REF || 'main' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### The pin and the crawler's main"
+            echo ""
+            bash scripts/pin-lag.sh --repo "$CRAWLER_REPO" --ref "$CRAWLER_REF"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build-and-push:
     runs-on: ubuntu-latest
     timeout-minutes: 25

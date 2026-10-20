@@ -57,6 +57,10 @@ stack-up:
 stack-down *args:
     bash scripts/stack-down.sh {{args}}
 
+[doc('Remove the local stack, the build output and the test artefacts')]
+clean *args:
+    bash scripts/clean.sh {{args}}
+
 # ==============================================================================
 # Database maintenance
 # ==============================================================================
