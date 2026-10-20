@@ -28,7 +28,7 @@
 # Point the suite at another image without editing this file:
 #
 #   CONTRACT_CRAWLER_IMAGE=wb-parser:local npm test
-ghcr.io/gazon1/wb-parser@sha256:a5cdb4be4e6296df3eb19e712a719bce70d25c3b0b9e1a6099c14b48ed561a14
+ghcr.io/gazon1/wb-parser@sha256:eaa4d7b2d1ece9a70ec40403ad47be59dd39be3aca494e386ce1874345a0835d
 
 # Updated by scripts/update-image-pin.sh — the digest of the image whose
 # compatibility run concluded 'success'. The pull request links to that run.
