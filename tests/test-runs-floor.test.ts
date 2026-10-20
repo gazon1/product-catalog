@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = resolve(__dirname, '..');
 const SCRIPT = resolve(ROOT, 'scripts', 'check-test-runs.py');
-const FLOOR = resolve(ROOT, 'config', 'test-runs-floor.tsv');
 
 /**
  * The floor, and the tool that maintains it.
@@ -33,6 +32,11 @@ const FLOOR = resolve(ROOT, 'config', 'test-runs-floor.tsv');
  * The script finds its root from where it lives, so a copy of `scripts/` and
  * `config/` beside each other is a repository as far as it is concerned. The
  * real files are never touched.
+ *
+ * The floor in the copy is written by the test rather than copied from the
+ * repository: the real floor moves every time a test is added, and a test
+ * that asserted against it would break on every such commit — and would stop
+ * meaning anything while it lasted.
  */
 function fixture(): string {
   const dir = resolve(ROOT, 'build', 'floor-test');
@@ -41,7 +45,16 @@ function fixture(): string {
   mkdirSync(resolve(dir, 'config'), { recursive: true });
   mkdirSync(resolve(dir, 'build', 'test-results'), { recursive: true });
   execFileSync('bash', ['-c', `cp "${SCRIPT}" "${dir}/scripts/"`]);
-  execFileSync('bash', ['-c', `cp "${FLOOR}" "${dir}/config/"`]);
+  writeFileSync(
+    resolve(dir, 'config', 'test-runs-floor.tsv'),
+    [
+      'tests/image-pin.test.ts\t7',
+      'tests/api-contract.test.ts\t32',
+      'tests/slug.test.ts\t14',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
   return dir;
 }
 
@@ -98,7 +111,13 @@ describe('the floor is only ever raised', () => {
     // The file that did not run keeps the floor it had — this is the whole
     // point: a floor that is gone cannot catch a file that stopped running.
     expect(floors['tests/api-contract.test.ts']).toBe('32');
-    expect(Object.keys(floors).length).toBeGreaterThan(5);
+    expect(floors['tests/slug.test.ts']).toBe('14');
+    // And the file that ran was raised, not left behind.
+    expect(Object.keys(floors).sort()).toEqual([
+      'tests/api-contract.test.ts',
+      'tests/image-pin.test.ts',
+      'tests/slug.test.ts',
+    ]);
   });
 
   it('never lowers a floor on its own', () => {
