@@ -228,15 +228,30 @@ git add "$PIN_FILE"
 git commit -m "chore: pin the crawler image to ${DIGEST:0:19}…" -m "$BODY"
 git push --force-with-lease origin "$BRANCH"
 
-existing="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)"
-if [[ -n "$existing" ]]; then
-    gh pr edit "$existing" --title "chore: pin the crawler image to ${DIGEST:0:19}…" --body "$BODY"
+# The pull request is opened through the REST endpoint rather than through
+# the GraphQL mutation that `gh pr create` uses. The mutation refuses the
+# token of a workflow unless the repository has allowed Actions to create
+# pull requests, and it refuses it with a message about *approving* pull
+# requests — which is not what this script does, and which leaves the reader
+# guessing. The REST endpoint asks the one question that matters here: may
+# this token open a pull request in this repository?
+REPO="${SITE_REPO:-gazon1/product-catalog}"
+OWNER="${REPO%%/*}"
+TITLE="chore: pin the crawler image to ${DIGEST:0:19}…"
+
+if ! command -v gh >/dev/null 2>&1; then
+    echo "error: the GitHub CLI is needed to open the pull request" >&2
+    exit 1
+fi
+
+existing="$(gh api "repos/${REPO}/pulls?state=open&head=${OWNER}:${BRANCH}" --jq '.[0].number' 2>/dev/null || true)"
+if [[ -n "$existing" && "$existing" != "null" ]]; then
+    gh api --method PATCH "repos/${REPO}/pulls/${existing}" \
+        -f title="$TITLE" -f body="$BODY" >/dev/null
     echo "pull request #${existing} updated"
 else
-    gh pr create \
-        --title "chore: pin the crawler image to ${DIGEST:0:19}…" \
-        --body "$BODY" \
-        --base "$BASE" \
-        --head "$BRANCH"
-    echo "pull request opened"
+    url="$(gh api --method POST "repos/${REPO}/pulls" \
+        -f title="$TITLE" -f head="$BRANCH" -f base="$BASE" -f body="$BODY" \
+        --jq '.html_url')"
+    echo "pull request opened: ${url}"
 fi
