@@ -48,7 +48,7 @@ export default async function HomePage() {
       listTopDeals({ paging: { page: 0, pageSize: 5 } }),
     ]);
 
-    const isEmpty = stats.totalItems === 0;
+    const isEmpty = stats.totalProducts === 0;
 
     return (
       <div className="container-page py-8">
@@ -57,15 +57,16 @@ export default async function HomePage() {
             Каталог с ценами и кэшбэком
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-slate-600">
-            Витрина читает базу краулера напрямую и только на чтение. Каждая карточка — одно
-            наблюдение товара на момент последнего обхода каталога.
+            Витрина читает базу краулера напрямую и только на чтение. Каждая карточка — один
+            товар с той ценой, которая у него сейчас: цена меняется, история меняений хранится,
+            а в списке товар один.
           </p>
         </section>
 
         <section aria-label="Сводка" className="mb-10 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Товаров" value={stats.totalItems.toLocaleString('ru-RU')} />
+          <Stat label="Товаров" value={stats.totalProducts.toLocaleString('ru-RU')} />
           <Stat label="Каталогов" value={stats.totalTargets.toLocaleString('ru-RU')} />
-          <Stat label="С кэшбэком" value={stats.withCashback.toLocaleString('ru-RU')} />
+          <Stat label="С кэшбэком" value={stats.productsWithCashback.toLocaleString('ru-RU')} />
           <Stat
             label="Обновлено"
             value={stats.newestScrapedAt ? formatScrapedAt(stats.newestScrapedAt) : '—'}

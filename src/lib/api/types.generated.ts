@@ -37,7 +37,7 @@
  * document always produces this file, byte for byte.
  *
  * The document this file was generated from has the fingerprint
- * `b9c87fa9c330a3b4b2240c4a468286be9bda8a54ad1ac0e8cb967bd0f031f224`.
+ * `bca08996ea763d2db65ab5be653dfe875b23244e3f54804c3e8dd165c6e05b51`.
  */
 export interface paths {
     "/targets": {
@@ -49,9 +49,10 @@ export interface paths {
         };
         /**
          * Every crawl target with its item count.
-         * @description A full pass over the scraped items, grouped per target. It is the one
-         *     aggregate that does not scale for free, so the API caches it for ten
-         *     minutes rather than recomputing it per request.
+         * @description A full pass over the read model — the current observation of each product —
+         *     grouped per target. It is the one aggregate that does not scale for free, so
+         *     the API caches it for ten minutes rather than recomputing it per request,
+         *     and the answer says when it was computed.
          */
         get: operations["listTargets"];
         put?: never;
@@ -69,7 +70,20 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A filtered, sorted, paginated page of product cards. */
+        /**
+         * A filtered, sorted, paginated page of product cards.
+         * @description The list is a list of **products**: the crawler stores one row per
+         *     (target, product, price) — a price change writes a new row and keeps the old
+         *     one, because the price history is made of those rows — and this endpoint
+         *     answers with the current observation of each product. A product that changed
+         *     price is one card, with the price it has now, not two cards with two prices.
+         *
+         *     The price filters read that current price: a product that was cheap last week
+         *     and is expensive today is not found by "up to N".
+         *
+         *     `totalCount` counts the products that match, not the price observations
+         *     behind them.
+         */
         get: operations["listItems"];
         put?: never;
         post?: never;
@@ -126,7 +140,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Aggregate counters for the whole catalog. */
+        /**
+         * Aggregate counters for the whole catalog.
+         * @description The counters come in two pairs, because the crawler stores price *observations*
+         *     and the storefront shows *products*. `totalItems` and `withCashback` count the
+         *     observations; `totalProducts` and `productsWithCashback` count the products.
+         *
+         *     The aggregate is cached for ten minutes, so the answer carries `asOf` — the
+         *     moment the counters were computed.
+         */
         get: operations["getStats"];
         put?: never;
         post?: never;
@@ -285,7 +307,7 @@ export interface components {
             name: string;
             rootCategoryName?: string | null;
             isActive: boolean;
-            /** @description How many items this target holds. Zero for a configured but empty target. */
+            /** @description How many products this target holds right now — the current observation of each product in it. Zero for a configured but empty target. It is not the number of price observations the target has produced: a product that changed price twice is one product and two observations. */
             itemCount: number;
             /** Format: date-time */
             newestScrapedAt?: string | null;
@@ -302,12 +324,22 @@ export interface components {
             hasPrevPage: boolean;
         };
         SiteStats: {
+            /** @description How many price observations the catalog holds. The crawler stores one row per (target, product, price) — a price change writes a new row and keeps the old one, because the price history is made of those rows. This is the number of those rows, not the number of products. */
             totalItems: number;
+            /** @description How many products the catalog holds — the number a visitor means by "how many products are there". It is the number of distinct products, each counted once, with the price it has now. */
+            totalProducts: number;
             totalTargets: number;
             /** Format: date-time */
             newestScrapedAt?: string | null;
-            /** @description How many items carry a cashback percentage. */
+            /** @description How many observations carry a cashback percentage. */
             withCashback: number;
+            /** @description How many products carry a cashback percentage now. */
+            productsWithCashback: number;
+            /**
+             * Format: date-time
+             * @description The moment the counters were computed. The aggregate is cached for ten minutes, so a counter without a moment is a counter of unknown age.
+             */
+            asOf: string;
         };
     };
     responses: {
@@ -400,6 +432,11 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: components["schemas"]["TargetSummary"][];
+                        /**
+                         * Format: date-time
+                         * @description The moment the counts were computed. The aggregate is cached for ten minutes, so a count without a moment is a count of unknown age.
+                         */
+                        asOf: string;
                     };
                 };
             };
@@ -673,7 +710,7 @@ export interface operations {
  * every change to it — a retyped field, a renamed property, and a comment
  * that changes what the contract says.
  */
-export const CONTRACT_DOCUMENT_SHA256 = 'b9c87fa9c330a3b4b2240c4a468286be9bda8a54ad1ac0e8cb967bd0f031f224';
+export const CONTRACT_DOCUMENT_SHA256 = 'bca08996ea763d2db65ab5be653dfe875b23244e3f54804c3e8dd165c6e05b51';
 
 /** The properties of `ProductCard`, as the contract describes them. */
 export const PRODUCT_CARD_FIELDS = [
@@ -725,9 +762,12 @@ export const PAGED_FIELDS = [
 /** The properties of `SiteStats`, as the contract describes them. */
 export const SITE_STATS_FIELDS = [
   { name: 'totalItems', type: 'integer', nullable: false },
+  { name: 'totalProducts', type: 'integer', nullable: false },
   { name: 'totalTargets', type: 'integer', nullable: false },
   { name: 'newestScrapedAt', type: 'string', nullable: true },
   { name: 'withCashback', type: 'integer', nullable: false },
+  { name: 'productsWithCashback', type: 'integer', nullable: false },
+  { name: 'asOf', type: 'string', nullable: false },
 ] as const;
 
 /** The properties of `Error`, as the contract describes them. */
