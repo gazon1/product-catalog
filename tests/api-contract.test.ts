@@ -568,15 +568,23 @@ describe('top deals', () => {
 });
 
 describe('the targets and the counters', () => {
-  it('counts every item and never exceeds the total', async () => {
+  it('counts the products of every target, and never more than the catalog holds', async () => {
     const targets = await listTargets();
     const stats = await getSiteStats();
 
     expect(targets).toHaveLength(stats.totalTargets);
     for (const target of targets) {
       expect(target.itemCount).toBeGreaterThanOrEqual(0);
+      // A catalog cannot hold more products than the catalog has.
+      expect(target.itemCount).toBeLessThanOrEqual(stats.totalProducts);
     }
-    expect(targets.reduce((sum, t) => sum + t.itemCount, 0)).toBe(stats.totalItems);
+
+    // The targets count a product once per catalog it is in: a product that
+    // three catalogs carry is three rows in three catalogs and one product.
+    // So the sum is *more* than the number of products, and the number of
+    // price observations is more still.
+    expect(targets.reduce((sum, t) => sum + t.itemCount, 0)).toBeGreaterThanOrEqual(stats.totalProducts);
+    expect(stats.totalItems).toBeGreaterThanOrEqual(stats.totalProducts);
   });
 
   it('lists a configured but empty target', async () => {
