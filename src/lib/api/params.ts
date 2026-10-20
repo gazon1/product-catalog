@@ -26,6 +26,7 @@ import {
   DEFAULT_SORT,
   MAX_PAGE_SIZE,
   isSortOrder,
+  maxPageFor,
   type SortOrder,
 } from './sort';
 
@@ -59,13 +60,21 @@ export interface Paging {
  * that does not exist. The API clamps such a request itself — the contract says so,
  * and `400` is reserved for a parameter it cannot interpret at all — but the site
  * clamps as well, because the two answers have to be the same one.
+ *
+ * The page is clamped against the *offset* it produces rather than against a page
+ * index of its own: the database walks every row before the page, so the work is
+ * measured in rows, and a page of sixty rows and a page of one row cannot be
+ * bounded by the same index. `maxPageFor` is the same arithmetic the API uses, on
+ * the same number from the same contract.
  */
 export function normalizePaging(page: number, pageSize: number): Paging {
+  const size = Number.isFinite(pageSize)
+    ? Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)))
+    : DEFAULT_PAGE_SIZE;
+  const requested = Number.isFinite(page) ? Math.max(0, Math.floor(page)) : 0;
   return {
-    page: Number.isFinite(page) ? Math.max(0, Math.floor(page)) : 0,
-    pageSize: Number.isFinite(pageSize)
-      ? Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)))
-      : DEFAULT_PAGE_SIZE,
+    page: Math.min(requested, maxPageFor(size)),
+    pageSize: size,
   };
 }
 
