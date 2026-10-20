@@ -100,11 +100,18 @@ jobs:
       # copy of it — two documents describing the same shapes are two sources of
       # truth. It is read from the crawler's checkout, which is why the crawler
       # is checked out beside the storefront.
+      # The contract document and the image must come from the same commit.
+      #
+      # The image is a *build*, and a build belongs to a commit. The dispatch
+      # carries that commit; the checkout follows it. Checking out `main`
+      # instead would validate the answers of a pull request's image against
+      # the contract of a different commit — and the two can differ, which is
+      # exactly the case where the check has to be right.
       - name: Check out the crawler as a sibling checkout
         uses: actions/checkout@v7
         with:
           repository: ${{ vars.CRAWLER_REPO }}
-          ref: ${{ vars.CRAWLER_REF || 'main' }}
+          ref: ${{ github.event.client_payload.crawler_commit || vars.CRAWLER_REF || 'main' }}
           path: ${{ env.CRAWLER_DIR }}
 
       - uses: actions/setup-node@v7

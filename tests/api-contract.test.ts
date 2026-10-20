@@ -431,34 +431,33 @@ describe('the product page', () => {
   it('returns a product with its price history, newest first', async () => {
     const targets = await listTargets();
 
-    // Find a product that was observed more than once. Where such a product
-    // sits is the crawler's business: its observations are spread over the
-    // pages they were observed on, and the target that holds them is not
-    // necessarily the first one by name.
-    let idOf: string | undefined;
+    // The list is a list of *products*: one card each, with the price it has
+    // now. A product that was observed several times is therefore one card,
+    // and its observations are in its history — so the history is where this
+    // test looks for them.
+    //
+    // The oldest first, because the product with a history is the one that
+    // was observed first, and the crawler's seed puts it at the old end of the
+    // order. Where exactly it sits is the crawler's business; the test only
+    // insists that *some* card leads to a history of more than one entry.
+    let product: Awaited<ReturnType<typeof getProduct>> = null;
     for (const target of targets) {
-      const counts = new Map<string, number>();
-      const ids = new Map<string, string>();
-      for (let page = 0; ; page += 1) {
-        const chunk = await listItems({ targetId: target.id, paging: { page, pageSize: 60 } });
-        for (const item of chunk.items) {
-          const seen = (counts.get(item.title) ?? 0) + 1;
-          counts.set(item.title, seen);
-          if (!ids.has(item.title)) ids.set(item.title, item.id);
-          if (seen > 1) {
-            idOf = ids.get(item.title);
-            break;
-          }
+      const chunk = await listItems({
+        targetId: target.id,
+        sort: 'DateAsc',
+        paging: { page: 0, pageSize: 30 },
+      });
+      for (const item of chunk.items) {
+        const candidate = await getProduct(item.id);
+        if (candidate && candidate.history.length > 1) {
+          product = candidate;
+          break;
         }
-        if (idOf !== undefined || chunk.items.length < 60) break;
       }
-      if (idOf !== undefined) break;
+      if (product) break;
     }
 
-    expect(idOf, 'the catalog should contain a product with several observations').toBeDefined();
-
-    const product = await getProduct(idOf!);
-    expect(product).not.toBeNull();
+    expect(product, 'the catalog should contain a product with several observations').not.toBeNull();
     expect(product!.history.length).toBeGreaterThan(1);
 
     for (let i = 1; i < product!.history.length; i += 1) {
@@ -469,55 +468,64 @@ describe('the product page', () => {
   it('does not mix a product’s history across targets', async () => {
     const targets = await listTargets();
 
-    // How many observations of each title each target holds. A product that
-    // appears in two targets is the interesting case: a history that crossed
-    // the boundary would be longer than the target's own observations.
-    const perTarget = new Map<string, Map<string, number>>();
+    // Which products each target holds. A product that appears in two targets
+    // is the interesting case: a history that crossed the boundary would hold
+    // the other target's observations too.
+    //
+    // The list counts *products* now, not observations — one card per product,
+    // with the price it has now — so the counts say how many targets hold the
+    // product, and the observations are in the histories.
     const itemOf = new Map<string, Map<string, string>>();
     for (const target of targets) {
-      const counts = new Map<string, number>();
       const ids = new Map<string, string>();
       for (let page = 0; ; page += 1) {
         const chunk = await listItems({ targetId: target.id, paging: { page, pageSize: 60 } });
         for (const item of chunk.items) {
-          counts.set(item.title, (counts.get(item.title) ?? 0) + 1);
           if (!ids.has(item.title)) ids.set(item.title, item.id);
         }
         if (chunk.items.length < 60) break;
       }
-      perTarget.set(target.id, counts);
       itemOf.set(target.id, ids);
     }
 
-    let checked = false;
+    // One product that more than one target holds, and the targets that hold
+    // it. The item is taken from the scan above rather than from a fresh first
+    // page: where the product sits in the order is the crawler's business.
+    let shared: { title: string; targets: string[] } | undefined;
     for (const target of targets) {
-      const counts = perTarget.get(target.id)!;
-      for (const [title, count] of counts) {
-        if (count < 2) continue;
-
-        const elsewhere = targets.filter((other) => (perTarget.get(other.id)!.get(title) ?? 0) > 0);
+      for (const title of itemOf.get(target.id)!.keys()) {
+        const elsewhere = targets.filter((other) => itemOf.get(other.id)!.has(title));
         if (elsewhere.length < 2) continue;
-
-        // The item is taken from the scan above rather than from a fresh first
-        // page: where the product sits in the order is the crawler's business,
-        // and a product observed several times is not necessarily on page one.
-        const itemId = itemOf.get(target.id)!.get(title)!;
-        const product = await getProduct(itemId);
-        expect(product).not.toBeNull();
-        expect(
-          product!.history.length,
-          'the history holds observations from another target',
-        ).toBe(count);
-        checked = true;
+        shared = { title, targets: elsewhere.map((other) => other.id) };
         break;
       }
-      if (checked) break;
+      if (shared) break;
     }
 
     expect(
-      checked,
+      shared,
       'the catalog should contain a product that appears in more than one target',
-    ).toBe(true);
+    ).toBeDefined();
+
+    // The history of that product, fetched through each target's own card.
+    const histories: string[][] = [];
+    for (const targetId of shared!.targets) {
+      const itemId = itemOf.get(targetId)!.get(shared!.title)!;
+      const product = await getProduct(itemId);
+      expect(product).not.toBeNull();
+      histories.push(product!.history.map((point) => point.scrapedAt));
+    }
+
+    // Each target's history must hold that target's observations and not the
+    // other's. The union of the histories is what the crawler holds; a history
+    // that crossed the boundary would be the whole union on its own.
+    const union = new Set(histories.flat());
+    for (const history of histories) {
+      expect(
+        history.length,
+        'the history holds observations from another target',
+      ).toBeLessThan(union.size);
+    }
   });
 
   it('returns null for an unknown id', async () => {
