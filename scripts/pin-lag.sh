@@ -53,7 +53,9 @@ ok()   { printf '\033[0;32m  ✅ %s\033[0m\n' "$1"; }
 PIN_FILE="$ROOT/contract/crawler-image.txt"
 
 # The pin file is a comment block with one reference in it.
-image="$(grep -vE '^\s*(#|$)' "$PIN_FILE" | head -1)"
+# `|| true` is not optional: grep answers 1 when it finds nothing, and under
+# `set -e` that would end the script before it says anything.
+image="$(grep -vE '^\s*(#|$)' "$PIN_FILE" | head -1 || true)"
 
 if [ -z "$image" ]; then
     warn "the pin file names no image"
@@ -72,7 +74,7 @@ step "The commit the pinned image was built from"
 #
 # The label on the image is the fallback: an image built by a repository that
 # stamps `org.opencontainers.image.revision` says the same thing on its own.
-revision="$(grep -E '^#[[:space:]]*crawler-commit:' "$PIN_FILE" | head -1 | sed -E 's/^#[[:space:]]*crawler-commit:[[:space:]]*//')"
+revision="$(grep -E '^#[[:space:]]*crawler-commit:' "$PIN_FILE" | head -1 | sed -E 's/^#[[:space:]]*crawler-commit:[[:space:]]*//' || true)"
 
 if [ -z "$revision" ]; then
     # The timeout is not decoration: a Docker daemon that does not answer would
