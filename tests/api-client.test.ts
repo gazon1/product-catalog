@@ -34,13 +34,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Ajv2020 from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
-import { ApiError, apiGet, CONNECT_TIMEOUT_MS, REQUEST_TIMEOUT_MS } from '@/lib/api/client';
+import {
+  ApiError,
+  apiGet,
+  CONNECT_TIMEOUT_MS,
+  REQUEST_TIMEOUT_MS,
+  RETRY_AFTER_DEFAULT_MS,
+  RETRY_AFTER_MAX_MS,
+  sleeper,
+  TIMEOUT_RETRY_BACKOFF_MS,
+} from '@/lib/api/client';
 import { buildItemsQuery, buildTopDealsQuery } from '@/lib/api/params';
 import { SORT_ORDERS } from '@/lib/api/sort';
 import { buildValidator, parseContractDocument } from './global-setup';
 
 const API_URL = 'http://crawler.test:8080';
 const API_KEY = 'test-key-do-not-log';
+
+/** The real timer, kept before the fake replaces it. */
+const realWait = sleeper.wait;
 
 /** What the stubbed fetch was called with. */
 interface Call {
@@ -50,10 +62,20 @@ interface Call {
 
 let calls: Call[] = [];
 let restoreEnv: Array<[string, string | undefined]> = [];
+/** The waits the client asked for, in milliseconds. */
+let waits: number[] = [];
 
 beforeEach(() => {
   calls = [];
   restoreEnv = [];
+  waits = [];
+
+  // The wait is a seam, and the suite replaces it: a test that really slept for
+  // two seconds would be slow, and one that measured a real delay would fail on
+  // a loaded machine rather than on a change in the client.
+  sleeper.wait = async (ms: number) => {
+    waits.push(ms);
+  };
 
   for (const [name, value] of [
     ['CRAWLER_API_URL', API_URL],
@@ -73,6 +95,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  sleeper.wait = realWait;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   for (const [name, value] of restoreEnv) {
@@ -466,6 +489,213 @@ describe('one retry, and only where a retry helps', () => {
     expect(ids[0]).toBeTruthy();
     expect(ids[1]).toBeTruthy();
     expect(ids[0]).not.toBe(ids[1]);
+  });
+});
+
+/**
+ * The retry waits before it asks again.
+ *
+ * A retry that goes out in the same millisecond is a retry that arrives while
+ * the crawler is still saying no. The wait is the moment the answer named, made
+ * jittery so that callers refused at the same moment do not retry in lockstep,
+ * and capped so that a header cannot hold a page render for a minute.
+ *
+ * The waits are recorded rather than performed: the suite replaces the seam, so
+ * these cases prove what the client asked for without spending the time.
+ */
+describe('the retry waits before it asks again', () => {
+  it('waits for the moment the answer named', async () => {
+    let attempt = 0;
+    vi.stubGlobal('fetch', async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        return new Response(JSON.stringify({ error: 'not ready' }), {
+          status: 503,
+          headers: { 'Retry-After': '2' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    // Half of the computed wait: the delay is a share of the wait, not the wait.
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    const body = await apiGet<{ ok: boolean }>('/items');
+
+    expect(body.ok).toBe(true);
+    expect(attempt).toBe(2);
+    expect(waits).toHaveLength(1);
+    expect(waits[0]).toBe(1_000);
+    expect(waits[0]).toBeLessThanOrEqual(2_000);
+  });
+
+  it('never waits exactly the amount it was told', async () => {
+    // Callers refused at the same moment would otherwise retry in lockstep and
+    // hit the crawler again as one wave.
+    let attempt = 0;
+    vi.stubGlobal('fetch', async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        return new Response(JSON.stringify({ error: 'not ready' }), {
+          status: 503,
+          headers: { 'Retry-After': '2' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    await apiGet('/items');
+
+    expect(waits[0]).not.toBe(2_000);
+    expect(waits[0]).toBeGreaterThan(0);
+  });
+
+  it('asks again only after the wait', async () => {
+    // The order is the point: the second request must not go out while the
+    // crawler is still refusing.
+    const events: string[] = [];
+    let attempt = 0;
+    vi.stubGlobal('fetch', async () => {
+      attempt += 1;
+      events.push(`request ${attempt}`);
+      if (attempt === 1) {
+        return new Response(JSON.stringify({ error: 'not ready' }), {
+          status: 503,
+          headers: { 'Retry-After': '2' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    sleeper.wait = async () => {
+      events.push('wait');
+    };
+
+    await apiGet('/items');
+
+    expect(events).toEqual(['request 1', 'wait', 'request 2']);
+  });
+
+  it('caps the wait the answer asked for', async () => {
+    // A caller must not hang for a minute because a server said so.
+    let attempt = 0;
+    vi.stubGlobal('fetch', async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        return new Response(JSON.stringify({ error: 'not ready' }), {
+          status: 503,
+          headers: { 'Retry-After': '600' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    await apiGet('/items');
+
+    expect(waits).toHaveLength(1);
+    expect(waits[0]).toBeLessThanOrEqual(RETRY_AFTER_MAX_MS);
+    expect(waits[0]).toBeGreaterThan(0);
+  });
+
+  it('waits a little when the answer names no moment', async () => {
+    // A 503 without a `Retry-After` still means "not now": asking again in the
+    // same millisecond is asking again while the crawler is still saying no.
+    let attempt = 0;
+    vi.stubGlobal('fetch', async () => {
+      attempt += 1;
+      if (attempt === 1) return new Response(JSON.stringify({ error: 'not ready' }), { status: 503 });
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    await apiGet('/items');
+
+    expect(waits).toHaveLength(1);
+    expect(waits[0]).toBeGreaterThan(0);
+    expect(waits[0]).toBeLessThanOrEqual(RETRY_AFTER_DEFAULT_MS);
+  });
+
+  it('waits a short backoff after a timeout', async () => {
+    // A timeout says the crawler is slow, not that it is gone: the statement it
+    // was running may still be running. A second request in the same millisecond
+    // adds pressure exactly when the service is already slow.
+    let attempt = 0;
+    vi.stubGlobal(
+      'fetch',
+      (_input: unknown, init?: RequestInit) => {
+        attempt += 1;
+        if (attempt === 1) {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted.', 'AbortError'));
+            });
+          });
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+      },
+    );
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    const body = await apiGet<{ ok: boolean }>('/items', { connectTimeoutMs: 20, timeoutMs: 20 });
+
+    expect(body.ok).toBe(true);
+    expect(waits).toHaveLength(1);
+    expect(waits[0]).toBeGreaterThan(0);
+    expect(waits[0]).toBeLessThanOrEqual(TIMEOUT_RETRY_BACKOFF_MS);
+  });
+
+  it('never waits before an answer it does not retry', async () => {
+    // A `429` is an answer, and the caller is entitled to see it — however long
+    // its `Retry-After` says to wait.
+    for (const status of [400, 404, 429]) {
+      waits = [];
+      vi.stubGlobal('fetch', async () =>
+        status === 429
+          ? new Response(JSON.stringify({ error: 'too many requests' }), {
+              status,
+              headers: { 'Retry-After': '5' },
+            })
+          : new Response(JSON.stringify({ error: 'no' }), { status }),
+      );
+
+      await expect(apiGet('/items')).rejects.toMatchObject({ status });
+      expect(waits).toEqual([]);
+    }
+  });
+
+  it('never waits before a network failure', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('fetch failed');
+    });
+
+    await expect(apiGet('/items')).rejects.toBeInstanceOf(ApiError);
+    expect(waits).toEqual([]);
+  });
+
+  it('waits with a real timer when nothing replaces the seam', async () => {
+    // The seam is a seam and not a hole: what the running site uses is a timer
+    // that waits.
+    await expect(realWait(0)).resolves.toBeUndefined();
   });
 });
 

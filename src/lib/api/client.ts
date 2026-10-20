@@ -263,6 +263,8 @@ interface RawAnswer {
   requestId: string;
   /** The id the crawler answered with, or `null` when the answer carried none. */
   crawlerRequestId: string | null;
+  /** The moment the answer named, as the raw header value, or `null`. */
+  retryAfter: string | null;
 }
 
 /**
@@ -295,9 +297,84 @@ interface RawAnswer {
  * cannot interpret, a URL that does not exist. The second attempt would be wrong in
  * exactly the same way, and it would double the traffic of whoever is calling with a
  * broken key. A `429` is the same: the crawler asked the caller to wait, and the answer
- * is in the `Retry-After` header, not in asking again immediately.
+ * is in the `Retry-After` header, not in asking again immediately. A `429` is an answer,
+ * and the caller is entitled to see it.
  */
 const MAX_ATTEMPTS = 2;
+
+/**
+ * The longest a named moment may make the caller wait.
+ *
+ * A server that names a moment is believed, but not without a bound: the
+ * caller is a page render, and a page that hangs for a minute because a server
+ * said so is worse than a page that shows an error. Ten seconds is one whole
+ * request budget — a longer wait buys nothing the second attempt could not.
+ */
+export const RETRY_AFTER_MAX_MS = 10_000;
+
+/**
+ * The wait when the answer names no moment.
+ *
+ * A `503` without a `Retry-After` still means "not now", and asking again in
+ * the same millisecond is asking again while the crawler is still saying no.
+ */
+export const RETRY_AFTER_DEFAULT_MS = 1_000;
+
+/**
+ * The backoff after a timeout.
+ *
+ * A timeout says the crawler is slow, not that it is gone: the statement it
+ * was running may still be running. A second request in the same millisecond
+ * adds pressure exactly when the service is already under it.
+ */
+export const TIMEOUT_RETRY_BACKOFF_MS = 250;
+
+/**
+ * The wait between two attempts.
+ *
+ * The seam exists so the wait can be proved without a test that really waits:
+ * a suite that sleeps for two seconds a case is slow, and a case that measures
+ * a real delay is a case that fails on a loaded machine. The default is the
+ * real timer, and nothing in the running site replaces it.
+ */
+export const sleeper = {
+  /** Wait for the given number of milliseconds. */
+  wait(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  },
+};
+
+/**
+ * The delay to wait, with jitter.
+ *
+ * Full jitter: a random share of the computed wait, not the wait itself.
+ * Callers refused at the same moment would otherwise retry in lockstep and
+ * hit the crawler again as a wave — the same wave, a moment later.
+ */
+function jitter(delayMs: number): number {
+  return Math.floor(Math.random() * delayMs);
+}
+
+/**
+ * The moment the answer named, in milliseconds.
+ *
+ * The crawler sends the number of seconds until the caller may try again, so
+ * the header is a delay and not a timestamp. Anything else — no header at all,
+ * a date, a word — names no moment, and the caller falls back to the default
+ * wait.
+ */
+function retryAfterMs(header: string | null): number | null {
+  if (header === null) return null;
+  const text = header.trim();
+  if (text === '') return null;
+
+  const seconds = Number(text);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+
+  return Math.min(Math.floor(seconds * 1000), RETRY_AFTER_MAX_MS);
+}
 
 /**
  * Perform one GET and hand back the raw answer.
@@ -369,6 +446,9 @@ async function request(path: string, options: ApiRequestOptions = {}): Promise<R
       // not send the header is not a reason to lose the correlation: the
       // site's own id is still there.
       crawlerRequestId: response.headers.get('X-Request-Id'),
+      // The moment the answer named, when it named one. It is the server's
+      // own word on when it may be asked again.
+      retryAfter: response.headers.get('Retry-After'),
     };
   } catch (err) {
     if (err instanceof ApiError) throw err;
@@ -431,6 +511,26 @@ async function request(path: string, options: ApiRequestOptions = {}): Promise<R
  * not answer in time, which is a statement about the crawler, not about the
  * query.
  *
+ * ## Why the second attempt waits
+ *
+ * Asking again in the same millisecond is asking again while the crawler is
+ * still saying no. When the answer names the moment at which it may be asked
+ * again — the `Retry-After` header — that moment is the wait: it is the
+ * server's own word on how long its refusal lasts, and a client that ignores
+ * it turns one refusal into two refusals in the same instant.
+ *
+ * The wait is jittered: the delay is a random share of the computed wait
+ * rather than the wait itself, because callers refused at the same moment
+ * would otherwise retry in lockstep and hit the crawler again as a wave.
+ *
+ * An answer that names no moment still gets a short wait rather than an
+ * immediate second question, and a timeout gets a short backoff of its own: a
+ * timeout means the crawler may still be working, and a second request in the
+ * same millisecond adds pressure exactly when the service is already slow.
+ *
+ * The wait is capped. A caller must not hang for a minute because a server
+ * said so.
+ *
  * ## What is not
  *
  * A `4xx` is the crawler saying "this request is wrong" — a bad key, a parameter
@@ -438,7 +538,9 @@ async function request(path: string, options: ApiRequestOptions = {}): Promise<R
  * wrong in exactly the same way, and it would double the traffic of whoever is
  * calling with a broken key. A `429` is the same: the crawler asked the caller
  * to wait, and the answer is in the `Retry-After` header, not in asking again
- * immediately.
+ * immediately. A `429` is an answer, and the caller is entitled to see it —
+ * which is also why a `429` is never retried here, however long its
+ * `Retry-After` says to wait.
  *
  * A network failure — the connection refused, the host does not exist — is not
  * repeated either. The crawler is not there, and a second attempt would find it
@@ -474,6 +576,7 @@ async function requestWithRetry(
             requestId: answer.crawlerRequestId ?? answer.requestId,
           },
         );
+        await sleeper.wait(jitter(retryAfterMs(answer.retryAfter) ?? RETRY_AFTER_DEFAULT_MS));
         continue;
       }
 
@@ -482,6 +585,7 @@ async function requestWithRetry(
       // A timeout is worth one more question; an answered refusal is not.
       if (err instanceof ApiError && err.timedOut && attempt < MAX_ATTEMPTS) {
         lastError = err;
+        await sleeper.wait(jitter(TIMEOUT_RETRY_BACKOFF_MS));
         continue;
       }
       throw err;
