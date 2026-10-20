@@ -232,6 +232,16 @@ jobs:
         with:
           ref: ${{ inputs.site_ref || github.event.client_payload.site_ref || github.ref }}
 
+      # The runner has no git identity: a fresh checkout has none, and a commit
+      # without one is refused outright ("Please tell me who you are"). The
+      # commit is made by this workflow, so this workflow says who it is — the
+      # bot account GitHub gives every run — and the identity is set on the
+      # repository rather than globally, so nothing outside it is touched.
+      - name: Tell git who is committing
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Move the pin, in a pull request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
