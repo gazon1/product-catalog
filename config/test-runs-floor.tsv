@@ -1,14 +1,16 @@
 # Executed-test floors, one row per test file: `<file> <min-count>`.
-# Managed by scripts/check-test-runs.py --update.
+# Managed by scripts/check-test-runs.py --update, which only ever
+# raises a floor: a file that did not run keeps the floor it had.
 #
 # Per file, not per suite total: a total would let one file's growth mask
-# another's disappearance, and database.test.ts is the one that must not
-# disappear — it is the only file that talks to a database.
+# another's disappearance, and api-contract.test.ts is the one that must
+# not disappear — it is the only file that starts the crawler and reads
+# its answers.
 #
 # Raise in the same commit that adds tests. Lowering is allowed only when
 # tests are genuinely deleted, and the commit should say which.
 
-tests/api-client.test.ts	40
+tests/api-client.test.ts	49
 tests/api-contract.test.ts	32
 tests/architecture.test.ts	23
 tests/contract-types.test.ts	7
@@ -18,3 +20,4 @@ tests/money.test.ts	12
 tests/params.test.ts	11
 tests/server-rendering.test.ts	3
 tests/slug.test.ts	14
+tests/test-runs-floor.test.ts	2

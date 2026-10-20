@@ -174,20 +174,49 @@ def main() -> int:
         problems.append(f"{name}: ran {measured[name]} tests but has no floor — run with --update")
 
     if args.update:
+        # The floor is merged into, never rewritten from the current run.
+        #
+        # A run of one file measured one file, and writing the file from the
+        # measurement would delete every other file's floor — and a floor that
+        # is gone cannot catch the file it was watching. The floor exists
+        # precisely to notice that a file stopped running, so the tool that
+        # maintains it must not make that happen by itself.
+        #
+        # A floor is only ever raised here. Lowering one is a decision about
+        # deleted tests, and it is made by hand, in the commit that deletes
+        # them.
+        merged = dict(floors)
+        for name, ran in sorted(measured.items()):
+            existing = merged.get(name, 0)
+            if ran < existing:
+                print(
+                    f"  ·  {name}: ran {ran} tests, floor stays {existing} — "
+                    "lowering a floor is a decision, not a side effect of a run"
+                )
+                continue
+            merged[name] = ran
+
+        for name in sorted(set(floors) - set(measured)):
+            print(
+                f"  ·  {name}: did not run in this invocation, floor stays {floors[name]}"
+            )
+
         lines = [
             "# Executed-test floors, one row per test file: `<file> <min-count>`.",
-            "# Managed by scripts/check-test-runs.py --update.",
+            "# Managed by scripts/check-test-runs.py --update, which only ever",
+            "# raises a floor: a file that did not run keeps the floor it had.",
             "#",
             "# Per file, not per suite total: a total would let one file's growth mask",
-            "# another's disappearance, and database.test.ts is the one that must not",
-            "# disappear — it is the only file that talks to a database.",
+            "# another's disappearance, and api-contract.test.ts is the one that must",
+            "# not disappear — it is the only file that starts the crawler and reads",
+            "# its answers.",
             "#",
             "# Raise in the same commit that adds tests. Lowering is allowed only when",
             "# tests are genuinely deleted, and the commit should say which.",
             "",
         ]
-        for name in sorted(measured):
-            lines.append(f"{name}\t{measured[name]}")
+        for name in sorted(merged):
+            lines.append(f"{name}\t{merged[name]}")
         FLOOR_FILE.parent.mkdir(parents=True, exist_ok=True)
         FLOOR_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print("✅ floor file updated from the current run")
