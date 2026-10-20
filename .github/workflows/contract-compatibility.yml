@@ -86,8 +86,14 @@ jobs:
       - name: Record the site's commit
         run: |
           set -euo pipefail
-          echo "SITE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "site commit: $SITE_SHA"
+          # The commit is put into the environment for the later steps and printed
+          # here. It is read into a shell variable first: writing to `$GITHUB_ENV`
+          # only tells the *later* steps, and this step prints the value it just
+          # wrote — under `set -u` a name that the shell has never seen is a
+          # fatal error, not an empty string.
+          site_sha="$(git rev-parse HEAD)"
+          echo "SITE_SHA=$site_sha" >> "$GITHUB_ENV"
+          echo "site commit: $site_sha"
           echo "dispatch id:  $DISPATCH_ID"
 
       # The contract document is the crawler's own, and the storefront keeps no
