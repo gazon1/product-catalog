@@ -207,6 +207,20 @@ jobs:
   # operator named, and the tag they named with it: the operator takes
   # responsibility for saying that the image is a release build, and the script
   # still refuses a pull request's tag.
+  #
+  # ## Which token opens the pull request
+  #
+  # The token of the run may open a pull request only when the repository has
+  # allowed Actions to create and approve pull requests (Settings → Actions →
+  # General). When it has not, the run's own token is refused — and a run that
+  # cannot open the pull request must not pretend it has moved the pin, so the
+  # job fails there rather than quietly.
+  #
+  # A token the owner controls is the alternative: a fine-grained token with
+  # Contents: RW and Pull requests: RW on this repository, stored as the
+  # `PIN_PR_TOKEN` secret, is used in preference to the run's own. It is
+  # optional — the run's own token is the default, and the secret is there for
+  # the owner who would rather not flip a repository setting.
   pin:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -244,7 +258,8 @@ jobs:
 
       - name: Move the pin, in a pull request
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The run's own token, unless the owner stored one they control.
+          GH_TOKEN: ${{ secrets.PIN_PR_TOKEN || secrets.GITHUB_TOKEN }}
           SITE_REPO: ${{ github.repository }}
           CRAWLER_IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
           CRAWLER_TAG: ${{ inputs.crawler_tag || github.event.client_payload.tag }}
