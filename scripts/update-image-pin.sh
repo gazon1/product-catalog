@@ -175,6 +175,14 @@ This change is reviewed like any other: the pin is a decision.
 EOF
 )"
 
+# The branch is cut from the base *before* the file is written. A checkout
+# refuses to move when a tracked file it would overwrite has local changes —
+# and writing the pin first is exactly that. The order is the whole trick.
+if [[ "$DRY_RUN" != "true" ]]; then
+    git fetch origin "$BASE" --quiet
+    git checkout -B "$BRANCH" "origin/$BASE"
+fi
+
 # The reference line is the first non-comment line; the comments above it are
 # kept.
 {
@@ -205,11 +213,6 @@ if git diff --quiet -- "$PIN_FILE"; then
     exit 0
 fi
 
-# The branch is cut from the base, not from whatever the checkout happens to be
-# on: in CI the checkout is a detached commit, and a branch from there would
-# carry commits nobody asked for.
-git fetch origin "$BASE" --quiet
-git checkout -B "$BRANCH" "origin/$BASE"
 git add "$PIN_FILE"
 git commit -m "chore: pin the crawler image to ${DIGEST:0:19}…" -m "$BODY"
 git push --force-with-lease origin "$BRANCH"
