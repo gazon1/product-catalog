@@ -267,10 +267,21 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
+          # Exit code 1 from the script is a *refusal*, not a failure: a pull
+          # request's image is never the deployed one, and the pin must not name
+          # it. That is the script doing its job, so the job ends green — a red
+          # job here would say "the storefront is incompatible", and the
+          # compatibility check is a different job with a different answer.
+          status=0
           bash scripts/update-image-pin.sh \
             --digest "$CRAWLER_IMAGE" \
             --tag "$CRAWLER_TAG" \
-            --run-id "$RUN_ID"
+            --run-id "$RUN_ID" || status=$?
+          if [ "$status" -eq 1 ]; then
+            echo "::notice::the pin does not move for a pull request's image — that is the rule, not a failure"
+            exit 0
+          fi
+          exit "$status"
 
       - name: The identity of the pin
         if: always()

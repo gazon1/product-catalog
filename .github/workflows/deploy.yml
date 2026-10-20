@@ -118,6 +118,41 @@ jobs:
           fi
           echo "Route is in sync."
 
+      # The storefront and the crawler are two services, and the storefront is
+      # verified against exactly one crawler image: the digest it pins. A
+      # storefront that passed every check against that image, deployed against
+      # a different one, is a storefront nobody checked.
+      #
+      # The crawler records what is running in `.deployed-digest` (the Ansible
+      # role writes it on success), and the pin names what the storefront was
+      # checked against. They are two files on two machines, and nothing else
+      # compares them — so this step does.
+      - name: Check the running crawler is the one the pin names
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          pin=$(grep -vE '^\s*(#|$)' contract/crawler-image.txt | head -1)
+          digest="${pin##*@}"
+          case "$digest" in
+            sha256:*) ;;
+            *)
+              echo "::error::the pin names '$pin', which is not a digest. A production pin is a digest: a tag can be moved, a digest cannot."
+              exit 1
+              ;;
+          esac
+          running=$(ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "cat /opt/wbparser/.deployed-digest 2>/dev/null" || echo "<missing>")
+          echo "pin     $digest"
+          echo "running $running"
+          if [ "$running" != "$digest" ]; then
+            echo "::error::the crawler on the server is '$running', and the pin names '$digest'."
+            echo "::error::Deploy the crawler first (in the crawler repository: just wbparser-deploy -e wbparser_tag=<sha>), or move the pin to the crawler that runs."
+            exit 1
+          fi
+          echo "The running crawler is the one the storefront was checked against."
+
       - name: Deploy to server
         env:
           TAG: ${{ steps.meta.outputs.tag }}
