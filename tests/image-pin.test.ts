@@ -6,6 +6,20 @@ import { describe, expect, it } from 'vitest';
 const ROOT = resolve(__dirname, '..');
 const PIN_FILE = resolve(ROOT, 'contract', 'crawler-image.txt');
 const SCRIPT = resolve(ROOT, 'scripts', 'update-image-pin.sh');
+const WORKFLOW = resolve(ROOT, '.github', 'workflows', 'contract-compatibility.yml');
+
+/**
+ * The workflow that opens the pin's pull request.
+ *
+ * The pull request is opened by a workflow's token, and the runs it triggers
+ * hold in `action_required` until somebody approves them. The workflow that
+ * opens it is the one that has to let them run — so the shape of that
+ * approval, and of the merge that follows it, is part of what the pin is:
+ * a pin that moves without its checks is a pin nobody checked.
+ */
+function pinWorkflow(): string {
+  return readFileSync(WORKFLOW, 'utf8');
+}
 
 /**
  * The image pin, as the file names it.
@@ -79,8 +93,7 @@ describe('the image pin', () => {
   });
 });
 
-describe('the pin moves only for a release build', () => {
-  it('refuses a pull request image', () => {
+describe('the pin moves only for a release build', () => {  it('refuses a pull request image', () => {
     // The image of a pull request and the image of the merge that follows it
     // are two different images with two different digests — the merge rebuilds.
     // A pin that named the pull request's digest would name an image that is
@@ -131,5 +144,34 @@ describe('the pin moves only for a release build', () => {
 
     // And the real checkout is untouched.
     expect(pinnedImage()).not.toContain(digest);
+  });
+});
+
+describe('the pin is checked before it moves', () => {
+  it('approves the runs that wait for approval', () => {
+    // A pull request opened by a workflow's token triggers this repository's
+    // workflows, and those runs hold in `action_required` until they are
+    // approved. Without the approval they never run, and the pin would move
+    // against a pull request nobody ever checked.
+    const workflow = pinWorkflow();
+    expect(workflow).toContain('/approve');
+    expect(workflow).toContain('action_required');
+  });
+
+  it('waits for the run and reads its conclusion', () => {
+    // A run that has not finished is not a green check, and a run that
+    // concluded anything but `success` is not one either. The conclusion is
+    // read from the API, by the run's own id.
+    const workflow = pinWorkflow();
+    expect(workflow).toContain("actions/runs/${run_id}");
+    expect(workflow).toContain("--jq '.conclusion'");
+  });
+
+  it('merges only when the checks were green', () => {
+    // The merge is the last step and it is gated on the checks' own answer.
+    // A merge that did not ask would make every other gate here decorative.
+    const workflow = pinWorkflow();
+    expect(workflow).toContain("steps.pin_checks.outputs.green == 'true'");
+    expect(workflow).toContain('--auto --squash');
   });
 });

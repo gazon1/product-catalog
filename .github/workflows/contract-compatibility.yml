@@ -200,6 +200,13 @@ jobs:
   # about which crawler a storefront depends on is not a decision anybody made.
   # The pull request carries the digest and links to the run that proved it.
   #
+  # The pull request is not the end of the story: it runs no checks of its own
+  # (a pull request opened by a workflow's token triggers no workflow), so this
+  # job dispatches the storefront's own workflows on the pin's branch and waits
+  # for them. The contract test reads the pin, so it runs against the image the
+  # pin names — the pin is checked by the thing it claims. Only then does the
+  # pull request ask to be merged, and the branch protection has the last word.
+  #
   # ## Why it refuses a pull request's image
   #
   # The image of a pull request and the image of the merge that follows it are
@@ -230,7 +237,10 @@ jobs:
   # the owner who would rather not flip a repository setting.
   pin:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The pin's pull request is checked before it merges, and those checks are
+    # two full runs of this repository's own workflows. Ten minutes was enough
+    # to open a pull request and nothing else.
+    timeout-minutes: 45
     needs: contract
     # A dispatch from the crawler carries the image it published; a manual run
     # carries the image the operator named. Either way the pin needs a digest.
@@ -247,6 +257,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # Dispatching this repository's own workflows on the pin's branch needs
+      # this right; without it the dispatch is refused and the pull request
+      # would wait for checks that never ran.
+      actions: write
 
     steps:
       - uses: actions/checkout@v7
@@ -264,10 +278,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Move the pin, in a pull request
+        id: move
         env:
           # The run's own token, unless the owner stored one they control.
           GH_TOKEN: ${{ secrets.PIN_PR_TOKEN || secrets.GITHUB_TOKEN }}
           SITE_REPO: ${{ github.repository }}
+          # The branch the pin lives on. The script reads the same name, so the
+          # two cannot disagree about which pull request is the pin's.
+          PIN_BRANCH: ${{ vars.PIN_BRANCH || 'chore/pin-crawler-image' }}
           CRAWLER_IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
           CRAWLER_TAG: ${{ inputs.crawler_tag || github.event.client_payload.tag }}
           DISPATCH_ID: ${{ github.event.client_payload.dispatch_id }}
@@ -290,6 +308,154 @@ jobs:
           fi
           exit "$status"
 
+      # The pull request is found by the digest it names, not by its branch
+      # alone: an earlier pull request may still be open on the same branch,
+      # and that one names another image. Merging it would move the pin to an
+      # image this run never checked.
+      - name: The pull request the pin opened
+        id: pin_pr
+        env:
+          GH_TOKEN: ${{ secrets.PIN_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          SITE_REPO: ${{ github.repository }}
+          PIN_BRANCH: ${{ vars.PIN_BRANCH || 'chore/pin-crawler-image' }}
+          CRAWLER_IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
+        run: |
+          set -euo pipefail
+          owner="${SITE_REPO%%/*}"
+          digest="${CRAWLER_IMAGE##*@}"
+          number="$(gh api "repos/${SITE_REPO}/pulls?state=open&head=${owner}:${PIN_BRANCH}" \
+            --jq "[.[] | select((.body // \"\") | contains(\"${digest}\"))] | .[0].number // empty")"
+          if [ -z "$number" ]; then
+            echo "::notice::no open pull request names ${digest} — the pin did not move, so there is nothing to check"
+            exit 0
+          fi
+          echo "the pin's pull request is #${number} on ${PIN_BRANCH}"
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+          echo "branch=${PIN_BRANCH}" >> "$GITHUB_OUTPUT"
+
+      # The pull request's own checks are waiting for approval.
+      #
+      # A pull request opened by a workflow's token does trigger this
+      # repository's workflows — but the runs it triggers hold in
+      # `action_required` until somebody approves them, and nobody is watching:
+      # the pull request is opened by a job, and the job is the one that has to
+      # let it run. The approval is this job's to give, with the same token
+      # that opened the pull request.
+      #
+      # Approving is not a workaround: these are the ordinary checks of the
+      # ordinary pull request. The contract test reads `contract/crawler-image.txt`,
+      # so it runs against the image the pin names — the pin is checked by the
+      # thing it claims.
+      - name: The pull request's checks are approved
+        id: pin_approve
+        if: steps.pin_pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.PIN_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          SITE_REPO: ${{ github.repository }}
+          PIN_BRANCH: ${{ steps.pin_pr.outputs.branch }}
+          PR_NUMBER: ${{ steps.pin_pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/${SITE_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          echo "the pull request's head is ${sha}"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+          # The runs appear a moment after the pull request does. A run that
+          # has not appeared yet is a run that does not exist, and a run that
+          # never appears is a pull request whose checks never ran.
+          deadline=$(( $(date +%s) + 300 ))
+          pending=""
+          while [ -z "$pending" ]; do
+            pending="$(gh api "repos/${SITE_REPO}/actions/runs?event=pull_request&branch=${PIN_BRANCH}&per_page=20" \
+              --jq "[.workflow_runs[] | select(.head_sha == \"${sha}\" and .conclusion == \"action_required\")] | map(.id) | join(\" \")")"
+            if [ -z "$pending" ]; then
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "::error::no run of the pull request's head is waiting for approval — the pin's checks never started"
+                exit 1
+              fi
+              echo "waiting for the pull request's runs to appear..."
+              sleep 10
+            fi
+          done
+
+          for run in $pending; do
+            gh api --method POST "repos/${SITE_REPO}/actions/runs/${run}/approve" >/dev/null
+            echo "approved the run ${run}"
+          done
+
+      # And waited for. The runs that were approved are the pull request's own
+      # checks, and the branch protection asks about them by name.
+      - name: The pin's branch is checked
+        id: pin_checks
+        if: steps.pin_pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.PIN_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          SITE_REPO: ${{ github.repository }}
+          PIN_BRANCH: ${{ steps.pin_pr.outputs.branch }}
+          PR_NUMBER: ${{ steps.pin_pr.outputs.number }}
+          SHA: ${{ steps.pin_approve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          green=true
+          deadline=$(( $(date +%s) + 1800 ))
+
+          for workflow in ci.yml contract-types.yml; do
+            run_id=""
+            while [ -z "$run_id" ]; do
+              run_id="$(gh api "repos/${SITE_REPO}/actions/workflows/${workflow}/runs?head_sha=${SHA}&per_page=20" \
+                --jq "[.workflow_runs[] | select(.head_sha == \"${SHA}\")] | sort_by(.created_at) | .[-1].id // empty")"
+              if [ -z "$run_id" ]; then
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "::error::the ${workflow} run of the pull request's head never appeared — the pin is unchecked"
+                  green=false
+                  break
+                fi
+                echo "waiting for the ${workflow} run to appear..."
+                sleep 15
+              fi
+            done
+            [ -n "$run_id" ] || continue
+
+            # The run is waited for, not assumed: a run that never finishes is
+            # not a green check, it is no check at all.
+            while [ "$(gh api "repos/${SITE_REPO}/actions/runs/${run_id}" --jq '.status')" != "completed" ]; do
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "::error::the ${workflow} run ${run_id} did not finish — the pin is unchecked"
+                green=false
+                break 2
+              fi
+              sleep 20
+            done
+
+            # The jobs are read by name: a run can conclude green while a job
+            # it needed was skipped, and the branch protection asks about the
+            # jobs, not about the run.
+            echo "the ${workflow} run ${run_id}:"
+            gh api "repos/${SITE_REPO}/actions/runs/${run_id}/jobs" \
+              --jq '.jobs[] | "  \(.name): \(.conclusion // .status)"'
+            conclusion="$(gh api "repos/${SITE_REPO}/actions/runs/${run_id}" --jq '.conclusion')"
+            if [ "$conclusion" != "success" ]; then
+              echo "::error::the ${workflow} run ${run_id} concluded '${conclusion}' — the pin does not move"
+              green=false
+            fi
+          done
+
+          echo "green=${green}" >> "$GITHUB_OUTPUT"
+
+      # The pin merges itself once its own checks are green. The pull request
+      # is the decision, and the decision is taken by the checks it carries:
+      # the same gates every other pull request in this repository passes.
+      - name: The pin merges itself
+        if: steps.pin_pr.outputs.number != '' && steps.pin_checks.outputs.green == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PIN_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          SITE_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pin_pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --repo "$SITE_REPO" --auto --squash
+          echo "the pin's pull request #${PR_NUMBER} is queued to merge once the branch protection is satisfied"
+
       - name: The identity of the pin
         if: always()
         run: |
@@ -299,5 +465,7 @@ jobs:
             echo "- Crawler image: \`${{ inputs.crawler_image || github.event.client_payload.crawler_image }}\`"
             echo "- Compatibility run: \`${{ github.run_id }}\`"
             echo "- Dispatch id: \`${{ github.event.client_payload.dispatch_id }}\`"
+            echo "- Pull request: \`${{ steps.pin_pr.outputs.number || 'none' }}\`"
+            echo "- Checks on the pin's branch: \`${{ steps.pin_checks.outputs.green || 'not run' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 

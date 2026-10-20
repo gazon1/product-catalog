@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # A manual run on any branch. The pin's pull request is opened by a
+  # workflow's token, and the runs it triggers hold in `action_required` until
+  # they are approved — the workflow that opens the pull request approves them.
+  # This trigger is the way to re-run the checks on a branch by hand.
+  workflow_dispatch:
 
 # A newer push to the same branch makes the older run irrelevant, and its
 # cancelled job would otherwise hold a runner for the length of the build.
