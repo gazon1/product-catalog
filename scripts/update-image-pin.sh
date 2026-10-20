@@ -40,6 +40,7 @@
 # ## Usage
 #
 #   scripts/update-image-pin.sh --digest sha256:… [--tag TAG] [--run-id N]
+#                                 [--crawler-commit SHA]
 #                               [--verify-run] [--dry-run]
 #
 # `--verify-run` asks the script to read the run's conclusion from the GitHub
@@ -66,6 +67,10 @@ IMAGE_NAME="${CRAWLER_IMAGE_NAME:-ghcr.io/gazon1/wb-parser}"
 
 DIGEST=""
 TAG=""
+# The commit the image was built from. The pin names the image; the commit
+# says *when* it was built, and that is what makes the pin's staleness
+# visible (scripts/pin-lag.sh).
+CRAWLER_COMMIT=""
 RUN_ID=""
 VERIFY_RUN=false
 DRY_RUN=false
@@ -77,6 +82,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --digest) DIGEST="$2"; shift 2 ;;
+        --crawler-commit) CRAWLER_COMMIT="$2"; shift 2 ;;
         --tag) TAG="$2"; shift 2 ;;
         --run-id) RUN_ID="$2"; shift 2 ;;
         --verify-run) VERIFY_RUN=true; shift ;;
@@ -202,6 +208,12 @@ fi
     echo
     echo "# Updated by scripts/update-image-pin.sh — the digest of the image whose"
     echo "# compatibility run concluded 'success'. The pull request links to that run."
+    if [ -n "$CRAWLER_COMMIT" ]; then
+        echo "#"
+        echo "# crawler-commit: ${CRAWLER_COMMIT}"
+        echo "# The commit the pinned image was built from. A digest says which image"
+        echo "# is pinned; this says how far the crawler's main has moved since it."
+    fi
 } >"$PIN_FILE.new"
 
 mv "$PIN_FILE.new" "$PIN_FILE"

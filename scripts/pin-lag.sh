@@ -66,16 +66,22 @@ if [[ "$image" != *@sha256:* ]]; then
 fi
 
 step "The commit the pinned image was built from"
-# The timeout is not decoration: a Docker daemon that does not answer would
-# otherwise hang the report that was supposed to say the daemon is unwell.
-if ! revision="$(timeout 30 docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null)"; then
-    warn "the image could not be read from this machine — is it there, and is the Docker daemon answering? ('docker pull $image' first)"
-    exit 0
-fi
+# The pin records it: the crawler sends the commit with the publication, and
+# the pin keeps it next to the digest. That is the primary source — it needs
+# neither Docker nor the image.
+#
+# The label on the image is the fallback: an image built by a repository that
+# stamps `org.opencontainers.image.revision` says the same thing on its own.
+revision="$(grep -E '^#[[:space:]]*crawler-commit:' "$PIN_FILE" | head -1 | sed -E 's/^#[[:space:]]*crawler-commit:[[:space:]]*//')"
 
-if [ -z "$revision" ] || [ "$revision" = "<no value>" ]; then
-    warn "the image carries no revision label — the lag is not defined for it"
-    exit 0
+if [ -z "$revision" ]; then
+    # The timeout is not decoration: a Docker daemon that does not answer would
+    # otherwise hang the report that was supposed to say the daemon is unwell.
+    revision="$(timeout 30 docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
+    if [ -z "$revision" ] || [ "$revision" = "<no value>" ]; then
+        warn "the pin does not record the commit its image was built from, and the image carries no revision label — the lag is unknown"
+        exit 0
+    fi
 fi
 ok "$revision"
 
