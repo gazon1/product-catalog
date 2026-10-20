@@ -247,9 +247,15 @@ export async function getSiteStats(): Promise<SiteStats> {
 
   return {
     totalItems: stats.totalItems ?? 0,
+    totalProducts: stats.totalProducts ?? 0,
     totalTargets: stats.totalTargets ?? 0,
     newestScrapedAt: stats.newestScrapedAt ?? null,
     withCashback: stats.withCashback ?? 0,
+    productsWithCashback: stats.productsWithCashback ?? 0,
+    // The moment the counters were computed. The contract makes it required, and
+    // it is — but the storefront may briefly talk to a crawler that is older
+    // than the contract, and an empty string is what the page renders as "—".
+    asOf: stats.asOf ?? '',
   };
 }
 
