@@ -231,6 +231,34 @@ function imageIdOf(reference: string): string | null {
 }
 
 /**
+ * Pull the image when the pin names a digest and it is not on this machine.
+ *
+ * A pin that names a digest names an image in the registry, and a registry
+ * image is not on anybody's machine until it is pulled. Without this the suite
+ * would fail with "the image is not available locally" for a pin that is
+ * perfectly valid — and the failure would look like a broken pin rather than
+ * a missing download.
+ *
+ * A pin that names a local tag is not pulled: there is nothing to pull it
+ * from, and the tag is built by the developer's own `just app::docker-build`.
+ */
+function ensureImageIsPresent(reference: string): void {
+  if (!reference.includes('@sha256:')) return;
+  if (imageIdOf(reference) !== null) return;
+
+  console.log(`\n  pulling ${reference}…\n`);
+  try {
+    execFileSync('docker', ['pull', reference], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+  } catch {
+    // The failure is reported by the caller, which knows what the missing
+    // image means for the suite. This function only makes the attempt.
+  }
+}
+
+/**
  * The Docker daemon has to be there.
  *
  * Without it the contract test cannot run, and a suite that quietly continues
@@ -302,6 +330,7 @@ export default async function setup(): Promise<void> {
   assertDockerIsAvailable();
 
   const image = resolveCrawlerImage();
+  ensureImageIsPresent(image);
   const imageId = imageIdOf(image);
 
   if (imageId === null) {
@@ -316,9 +345,9 @@ export default async function setup(): Promise<void> {
       containerId: null,
       postgresUri: null,
       error:
-        `the crawler image "${image}" is not available locally. Build it in the crawler ` +
-        'repository (just app::docker-build) or point the suite at another one: ' +
-        `CONTRACT_CRAWLER_IMAGE=<image> npm test`,
+        `the crawler image "${image}" is not available locally. Pull it (docker pull ` +
+        `"${image}"), build it in the crawler repository (just app::docker-build), or ` +
+        `point the suite at another one: CONTRACT_CRAWLER_IMAGE=<image> npm test`,
     });
     console.log(`\n  ⚠ the crawler image "${image}" is not available — the contract test will fail\n`);
     return;

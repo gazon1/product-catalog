@@ -37,7 +37,7 @@
  * document always produces this file, byte for byte.
  *
  * The document this file was generated from has the fingerprint
- * `a9f3e15260498a8ace9ec72657c98369aaa5e80c856569f6ccd1d5da53211c12`.
+ * `b9c87fa9c330a3b4b2240c4a468286be9bda8a54ad1ac0e8cb967bd0f031f224`.
  */
 export interface paths {
     "/targets": {
@@ -434,6 +434,13 @@ export interface operations {
                  * @description Zero-based page index. A value outside the range is clamped into it
                  *     rather than rejected: a hostile page number is a mistake in a URL, and
                  *     the first page is a better answer than an error.
+                 *
+                 *     The bound is on the *offset* — `page x pageSize` — and not on the page
+                 *     index, because the offset is what the database pays for: it walks every
+                 *     row before the page. The offset never exceeds 1 000 000 rows, so the
+                 *     largest page depends on the page size (1 000 000 with the default page
+                 *     size of 24, 16 666 with the largest one of 60). A request beyond that
+                 *     is answered with the last page that fits, not with an error.
                  */
                 page?: number;
                 /**
@@ -504,6 +511,13 @@ export interface operations {
                  * @description Zero-based page index. A value outside the range is clamped into it
                  *     rather than rejected: a hostile page number is a mistake in a URL, and
                  *     the first page is a better answer than an error.
+                 *
+                 *     The bound is on the *offset* — `page x pageSize` — and not on the page
+                 *     index, because the offset is what the database pays for: it walks every
+                 *     row before the page. The offset never exceeds 1 000 000 rows, so the
+                 *     largest page depends on the page size (1 000 000 with the default page
+                 *     size of 24, 16 666 with the largest one of 60). A request beyond that
+                 *     is answered with the last page that fits, not with an error.
                  */
                 page?: number;
                 /**
@@ -659,7 +673,7 @@ export interface operations {
  * every change to it — a retyped field, a renamed property, and a comment
  * that changes what the contract says.
  */
-export const CONTRACT_DOCUMENT_SHA256 = 'a9f3e15260498a8ace9ec72657c98369aaa5e80c856569f6ccd1d5da53211c12';
+export const CONTRACT_DOCUMENT_SHA256 = 'b9c87fa9c330a3b4b2240c4a468286be9bda8a54ad1ac0e8cb967bd0f031f224';
 
 /** The properties of `ProductCard`, as the contract describes them. */
 export const PRODUCT_CARD_FIELDS = [

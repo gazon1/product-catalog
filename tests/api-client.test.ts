@@ -340,7 +340,9 @@ function lastRequestId(): string {
 function stubAnswer(response: Response): void {
   vi.stubGlobal('fetch', async (input: unknown, init?: RequestInit) => {
     calls.push({ url: String(input), init });
-    return response;
+    // A fresh copy for every attempt: a body can be read only once, and the client
+    // may ask again after a 503 or a timeout.
+    return response.clone();
   });
 }
 
@@ -352,6 +354,121 @@ function stubAnswer(response: Response): void {
  * failed. The two halves are checked separately, because they can disagree:
  * the crawler may answer with an id of its own, and it may answer with none.
  */
+describe('one retry, and only where a retry helps', () => {
+  it('asks again once after a 503', async () => {
+    // A 503 is the crawler saying "the catalog cannot be served right now". The
+    // request was well-formed; the moment was not — so asking again is the difference
+    // between a page that renders and a page that shows an error.
+    let attempt = 0;
+    vi.stubGlobal('fetch', async () => {
+      attempt += 1;
+      if (attempt === 1) return new Response(JSON.stringify({ error: 'not ready' }), { status: 503 });
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const body = await apiGet<{ ok: boolean }>('/items');
+    expect(body.ok).toBe(true);
+    expect(attempt).toBe(2);
+  });
+
+  it('asks again at most once after a 503', async () => {
+    // A retry is a request the caller did not ask for, and it costs the crawler's
+    // database a query. One retry turns a single unlucky moment into a page that
+    // works; two retries turn a crawler that is down into three times the load.
+    let attempt = 0;
+    vi.stubGlobal('fetch', async () => {
+      attempt += 1;
+      return new Response(JSON.stringify({ error: 'not ready' }), { status: 503 });
+    });
+
+    await expect(apiGet('/items')).rejects.toMatchObject({ status: 503 });
+    expect(attempt).toBe(2);
+  });
+
+  it('asks again once after a timeout', async () => {
+    let attempt = 0;
+    vi.stubGlobal(
+      'fetch',
+      (_input: unknown, init?: RequestInit) => {
+        attempt += 1;
+        if (attempt === 1) {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted.', 'AbortError'));
+            });
+          });
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+      },
+    );
+
+    const body = await apiGet<{ ok: boolean }>('/items', { connectTimeoutMs: 20, timeoutMs: 20 });
+    expect(body.ok).toBe(true);
+    expect(attempt).toBe(2);
+  });
+
+  it('never asks again after a 4xx', async () => {
+    // A 4xx is the crawler saying "this request is wrong". The second attempt would be
+    // wrong in exactly the same way, and it would double the traffic of whoever is
+    // calling with a broken key.
+    for (const status of [400, 401, 404, 429]) {
+      let attempt = 0;
+      vi.stubGlobal('fetch', async () => {
+        attempt += 1;
+        return new Response(JSON.stringify({ error: 'no' }), { status });
+      });
+
+      await expect(apiGet('/items')).rejects.toMatchObject({ status });
+      expect(attempt).toBe(1);
+    }
+  });
+
+  it('never asks again after a network failure', async () => {
+    // The crawler is not there, and a second attempt would find it still not there —
+    // the caller is better served by an honest error than by a request that waits
+    // twice as long to fail the same way.
+    let attempt = 0;
+    vi.stubGlobal('fetch', async () => {
+      attempt += 1;
+      throw new TypeError('fetch failed');
+    });
+
+    await expect(apiGet('/items')).rejects.toBeInstanceOf(ApiError);
+    expect(attempt).toBe(1);
+  });
+
+  it('sends a different request id with the second attempt', async () => {
+    // The two attempts are two requests, and the crawler's log holds two entries. An
+    // id that was the same for both would make them indistinguishable in the log.
+    let attempt = 0;
+    const ids: Array<string | null | undefined> = [];
+    vi.stubGlobal('fetch', async (_input: unknown, init?: RequestInit) => {
+      attempt += 1;
+      const headers = new Headers(init?.headers);
+      ids.push(headers.get('X-Request-Id'));
+      if (attempt === 1) return new Response(JSON.stringify({ error: 'not ready' }), { status: 503 });
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    await apiGet('/items');
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toBeTruthy();
+    expect(ids[1]).toBeTruthy();
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+});
+
 describe('the request id', () => {
   it('sends an id of its own with every request', async () => {
     await apiGet('/items');

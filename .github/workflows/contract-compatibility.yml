@@ -50,6 +50,14 @@ on:
         required: false
         default: main
         type: string
+      crawler_tag:
+        description: >-
+          The tag of the build the image came from. A `pr-<n>` tag is refused:
+          a pull request's image is never the deployed one, because the merge
+          rebuilds it.
+        required: false
+        default: manual
+        type: string
 
 permissions:
   contents: read
@@ -162,3 +170,84 @@ jobs:
             echo "- Dispatch id: \`$DISPATCH_ID\`"
             echo "- Run id: \`${{ github.run_id }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # The pin moves on the strength of a green compatibility run, and only then.
+  #
+  # ## Why this is a separate job
+  #
+  # It `needs: contract`, so it runs only when the compatibility check passed —
+  # and the dependency is the proof, rather than a check of the proof. A run
+  # that reports "success" because it was skipped would move the pin to an
+  # image nobody checked the storefront against.
+  #
+  # ## Why it opens a pull request and does not commit
+  #
+  # The pin is a decision: "this storefront understands this crawler image".
+  # A commit would make the decision automatic, and an automatic decision
+  # about which crawler a storefront depends on is not a decision anybody made.
+  # The pull request carries the digest and links to the run that proved it.
+  #
+  # ## Why it refuses a pull request's image
+  #
+  # The image of a pull request and the image of the merge that follows it are
+  # two different images with two different digests — the merge rebuilds. A pin
+  # that named the pull request's digest would name an image that is never
+  # deployed. The script refuses a `pr-<n>` tag for exactly that reason.
+  #
+  # ## The two ways in
+  #
+  # A dispatch from the crawler carries the image it published and the tag of
+  # the build it came from — nothing to say. A manual run carries the image the
+  # operator named, and the tag they named with it: the operator takes
+  # responsibility for saying that the image is a release build, and the script
+  # still refuses a pull request's tag.
+  pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: contract
+    # A dispatch from the crawler carries the image it published; a manual run
+    # carries the image the operator named. Either way the pin needs a digest.
+    if: >-
+      (
+        github.event_name == 'repository_dispatch' &&
+        startsWith(github.event.client_payload.crawler_image, 'ghcr.io/') &&
+        contains(github.event.client_payload.crawler_image, '@sha256:')
+      ) || (
+        github.event_name == 'workflow_dispatch' &&
+        startsWith(inputs.crawler_image, 'ghcr.io/') &&
+        contains(inputs.crawler_image, '@sha256:')
+      )
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.site_ref || github.event.client_payload.site_ref || github.ref }}
+
+      - name: Move the pin, in a pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CRAWLER_IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
+          CRAWLER_TAG: ${{ inputs.crawler_tag || github.event.client_payload.tag }}
+          DISPATCH_ID: ${{ github.event.client_payload.dispatch_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          bash scripts/update-image-pin.sh \
+            --digest "$CRAWLER_IMAGE" \
+            --tag "$CRAWLER_TAG" \
+            --run-id "$RUN_ID"
+
+      - name: The identity of the pin
+        if: always()
+        run: |
+          {
+            echo "### Image pin"
+            echo ""
+            echo "- Crawler image: \`${{ inputs.crawler_image || github.event.client_payload.crawler_image }}\`"
+            echo "- Compatibility run: \`${{ github.run_id }}\`"
+            echo "- Dispatch id: \`${{ github.event.client_payload.dispatch_id }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+

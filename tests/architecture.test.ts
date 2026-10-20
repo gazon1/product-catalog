@@ -1,6 +1,8 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { normalizePaging } from '@/lib/api/params';
+import { DEFAULT_PAGE_SIZE, MAX_OFFSET, MAX_PAGE_SIZE, maxPageFor } from '@/lib/api/sort';
 import { isSortOrder, SORT_ORDERS } from '@/lib/types';
 import { parseContractDocument } from './global-setup';
 
@@ -367,6 +369,54 @@ describe('the dependency tree has no database driver', () => {
 
   it('does not depend on the driver’s types either', () => {
     expect(Object.keys(pkg.devDependencies ?? {})).not.toContain('@types/pg');
+  });
+});
+
+describe('the offset bound is the contract’s offset bound', () => {
+  /**
+   * The contract's offset bound, as the document declares it.
+   *
+   * The site mirrors the bound by hand, the way it mirrors the shapes and the
+   * sort names, and this is what keeps the mirror honest. The bound is the
+   * number that decides whether a deep page is clamped or refused, so a drift
+   * here would mean the storefront asks for a page the API will not serve —
+   * and shows a page the API never sent.
+   */
+  function contractMaxOffset(): number {
+    const document = parseContractDocument() as {
+      'x-catalog-paging'?: { maxOffset?: number };
+    };
+    const value = document['x-catalog-paging']?.maxOffset;
+    if (typeof value !== 'number') {
+      throw new Error(
+        'the contract document does not declare `x-catalog-paging.maxOffset`. The offset ' +
+          'bound is part of the contract: the API clamps to it and the storefront clamps to it.',
+      );
+    }
+    return value;
+  }
+
+  it('sends the bound the contract declares', () => {
+    expect(MAX_OFFSET).toBe(contractMaxOffset());
+  });
+
+  it('bounds the page by the offset it produces, not by a page index', () => {
+    // The bound depends on the page size: the database walks every row before
+    // the page, so the work is measured in rows. A page of sixty rows and a
+    // page of one row cannot be bounded by the same index.
+    expect(maxPageFor(60)).toBe(Math.floor(MAX_OFFSET / 60));
+    expect(maxPageFor(1)).toBe(MAX_OFFSET);
+    expect(maxPageFor(DEFAULT_PAGE_SIZE)).toBe(Math.floor(MAX_OFFSET / DEFAULT_PAGE_SIZE));
+  });
+
+  it('keeps the offset of every clamped page inside the bound', () => {
+    // Over the whole range of page sizes rather than over two hand-picked
+    // cases: a clamp that held for one size and not another would be a clamp
+    // that fails on a URL nobody tested.
+    for (let pageSize = 1; pageSize <= MAX_PAGE_SIZE; pageSize += 1) {
+      const paging = normalizePaging(99_999_999, pageSize);
+      expect(paging.page * paging.pageSize).toBeLessThanOrEqual(MAX_OFFSET);
+    }
   });
 });
 

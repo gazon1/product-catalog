@@ -60,7 +60,8 @@ import {
   type FieldDescriptor,
 } from '@/lib/api/types';
 import { SORT_ORDERS } from '@/lib/api/sort';
-import { buildItemsQuery } from '@/lib/api/params';
+import { buildItemsQuery, normalizePaging } from '@/lib/api/params';
+import { MAX_OFFSET } from '@/lib/api/sort';
 import {
   getProduct,
   getSiteStats,
@@ -292,6 +293,32 @@ describe('pagination', () => {
 
     // And the site's own builder never sends the hostile value in the first place.
     expect(buildItemsQuery({ paging: { page: -5, pageSize: 24 } }).get('page')).toBe('0');
+  });
+
+  it('clamps a deep page by the offset, not by the page index', async () => {
+    // The bound is on the offset — `page x pageSize` — because that is what the
+    // database pays for: it walks every row before the page. A deep page is
+    // therefore clamped to the last page that fits, and answered with that
+    // page's rows rather than with an error.
+    //
+    // The site clamps to the same number, from the same contract: a storefront
+    // that clamped to a different page than the API serves would show a page
+    // the API never sent.
+    const pageSize = 60;
+    const expected = Math.floor(MAX_OFFSET / pageSize);
+
+    const body = await apiGet<{ page: number; pageSize: number }>('/items', {
+      query: new URLSearchParams({ page: '99999999', pageSize: String(pageSize) }),
+    });
+    expect(body.page).toBe(expected);
+    expect(body.page * body.pageSize).toBeLessThanOrEqual(MAX_OFFSET);
+
+    // The site's own clamp agrees with the API's answer.
+    const site = normalizePaging(99_999_999, pageSize);
+    expect(site.page).toBe(body.page);
+    expect(buildItemsQuery({ paging: { page: 99_999_999, pageSize } }).get('page')).toBe(
+      String(expected),
+    );
   });
 });
 

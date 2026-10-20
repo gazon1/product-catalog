@@ -91,6 +91,15 @@ export class ApiError extends Error {
    */
   readonly requestId: string | null;
 
+  /**
+   * Whether the failure was a deadline rather than an answer.
+   *
+   * The distinction decides whether the call is worth repeating: a request that ran
+   * out of time says nothing about the request itself, so it may be asked again,
+   * while a request that was answered and refused does not.
+   */
+  readonly timedOut: boolean;
+
   constructor(
     message: string,
     options: {
@@ -99,6 +108,7 @@ export class ApiError extends Error {
       path?: string;
       cause?: unknown;
       requestId?: string | null;
+      timedOut?: boolean;
     } = {},
   ) {
     super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
@@ -107,6 +117,7 @@ export class ApiError extends Error {
     this.body = options.body;
     this.path = options.path ?? '';
     this.requestId = options.requestId ?? null;
+    this.timedOut = options.timedOut ?? false;
   }
 }
 
@@ -255,6 +266,40 @@ interface RawAnswer {
 }
 
 /**
+ * The number of times a request is attempted.
+ *
+ * Two means one retry: the first attempt and one more.
+ *
+ * ## Why there is a retry at all
+ *
+ * The two failures worth retrying are the two that are not about the request itself.
+ *
+ * A `503` is the crawler saying "the catalog cannot be served right now" — the database
+ * is restarting, a statement hit the crawler's timeout, the readiness check says no. The
+ * request was well-formed; the moment was not. Asking again a moment later is the
+ * difference between a page that renders and a page that shows an error.
+ *
+ * A timeout is the same kind of failure seen from the other side: the crawler did not
+ * answer in time, which is a statement about the crawler, not about the query.
+ *
+ * ## Why the retry is exactly one
+ *
+ * A retry is a request the caller did not ask for, and it costs the crawler's database a
+ * query. One retry turns a single unlucky moment into a page that works; two retries turn
+ * a crawler that is down into three times the load, which is the opposite of what the
+ * retry is for.
+ *
+ * ## Why `4xx` is never retried
+ *
+ * A `4xx` is the crawler saying "this request is wrong" — a bad key, a parameter it
+ * cannot interpret, a URL that does not exist. The second attempt would be wrong in
+ * exactly the same way, and it would double the traffic of whoever is calling with a
+ * broken key. A `429` is the same: the crawler asked the caller to wait, and the answer
+ * is in the `Retry-After` header, not in asking again immediately.
+ */
+const MAX_ATTEMPTS = 2;
+
+/**
  * Perform one GET and hand back the raw answer.
  *
  * This is where the deadlines live, and where every failure becomes an
@@ -334,7 +379,7 @@ async function request(path: string, options: ApiRequestOptions = {}): Promise<R
           `the catalog API did not answer within ${connectTimeoutMs} ms (the request timed out) for ${path} (request ${requestId})`,
           secret,
         ),
-        { path, cause: err, requestId },
+        { path, cause: err, requestId, timedOut: true },
       );
     }
     if (phase === 'overall') {
@@ -343,7 +388,7 @@ async function request(path: string, options: ApiRequestOptions = {}): Promise<R
           `the catalog API did not answer within ${timeoutMs} ms (the request timed out) for ${path} (request ${requestId})`,
           secret,
         ),
-        { path, cause: err, requestId },
+        { path, cause: err, requestId, timedOut: true },
       );
     }
 
@@ -370,6 +415,85 @@ async function request(path: string, options: ApiRequestOptions = {}): Promise<R
 }
 
 /**
+ * Perform one GET against the catalog API, and try once more if it is worth trying.
+ *
+ * ## What is worth repeating
+ *
+ * Two failures, and only two.
+ *
+ * A `503` is the crawler saying "the catalog cannot be served right now" — the
+ * database is restarting, a statement hit the crawler's timeout, the readiness
+ * check says no. The request was well-formed; the moment was not. Asking again
+ * a moment later is the difference between a page that renders and a page that
+ * shows an error.
+ *
+ * A timeout is the same kind of failure seen from the other side: the crawler did
+ * not answer in time, which is a statement about the crawler, not about the
+ * query.
+ *
+ * ## What is not
+ *
+ * A `4xx` is the crawler saying "this request is wrong" — a bad key, a parameter
+ * it cannot interpret, a URL that does not exist. The second attempt would be
+ * wrong in exactly the same way, and it would double the traffic of whoever is
+ * calling with a broken key. A `429` is the same: the crawler asked the caller
+ * to wait, and the answer is in the `Retry-After` header, not in asking again
+ * immediately.
+ *
+ * A network failure — the connection refused, the host does not exist — is not
+ * repeated either. The crawler is not there, and a second attempt would find it
+ * still not there; the caller is better served by an honest error than by a
+ * request that waits twice as long to fail the same way.
+ *
+ * ## Why the retry is exactly one
+ *
+ * A retry is a request the caller did not ask for, and it costs the crawler's
+ * database a query. One retry turns a single unlucky moment into a page that
+ * works; two retries turn a crawler that is down into three times the load,
+ * which is the opposite of what the retry is for.
+ */
+async function requestWithRetry(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<RawAnswer> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const answer = await request(path, options);
+
+      if (answer.status === 503 && attempt < MAX_ATTEMPTS) {
+        // The crawler answered and said "not now". A moment later it may well say
+        // "yes", and this is the one status where that is worth a second question.
+        lastError = new ApiError(
+          redact(failureMessage(503, parseBody(answer.text), path, answer.crawlerRequestId ?? answer.requestId), apiSecret()),
+          {
+            status: 503,
+            body: parseBody(answer.text),
+            path,
+            requestId: answer.crawlerRequestId ?? answer.requestId,
+          },
+        );
+        continue;
+      }
+
+      return answer;
+    } catch (err) {
+      // A timeout is worth one more question; an answered refusal is not.
+      if (err instanceof ApiError && err.timedOut && attempt < MAX_ATTEMPTS) {
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // The loop only falls through when the last attempt was a `503` — the answer
+  // itself was thrown away, and the error built from it is what the caller sees.
+  throw lastError;
+}
+
+/**
  * Perform one GET against the catalog API and return the parsed body.
  *
  * A 2xx answer is returned as JSON. Everything else throws an
@@ -379,7 +503,7 @@ async function request(path: string, options: ApiRequestOptions = {}): Promise<R
  * served.
  */
 export async function apiGet<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const answer = await request(path, options);
+  const answer = await requestWithRetry(path, options);
   const body = parseBody(answer.text);
 
   if (!answer.ok) {
@@ -410,7 +534,10 @@ export async function apiGetText(path: string, options: ApiRequestOptions = {}):
   // The contract document is YAML, and the crawler says so in its `produces`. The
   // `*/*` at the end keeps the helper usable for the JSON endpoints too, without
   // making the caller say which one it expects.
-  const answer = await request(path, { accept: 'application/yaml, text/plain, */*', ...options });
+  const answer = await requestWithRetry(path, {
+    accept: 'application/yaml, text/plain, */*',
+    ...options,
+  });
 
   if (!answer.ok) {
     const requestId = answer.crawlerRequestId ?? answer.requestId;
