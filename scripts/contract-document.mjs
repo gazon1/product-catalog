@@ -21,9 +21,22 @@
  *      lives somewhere else;
  *   2. `contract/catalog-v1.openapi.yaml` inside this repository — where a
  *      pinned local copy would go;
- *   3. the crawler repository next to this one — the normal layout.
+ *   3. the crawler repository next to this one — the local layout;
+ *   4. the crawler repository inside this one's directory — the CI layout.
  *
  * The first candidate that exists wins, and the others are not consulted.
+ *
+ * ## Why there are two layouts
+ *
+ * Locally the two repositories are two directories side by side. In CI the
+ * crawler is checked out with `actions/checkout` and a `path:`, and that path
+ * is resolved against the workspace, which *is* this repository's directory —
+ * so the crawler lands inside it, not beside it. A resolver that knows only
+ * one of the two layouts works locally and fails in CI, which is the worst
+ * way for it to fail.
+ *
+ * The directory's name comes from `CRAWLER_DIR` when it is set, because that
+ * is what the workflows call it.
  *
  * The types of this module are declared in `contract-document.d.mts`, for the
  * TypeScript side — the tests and the site's own code — to import it.
@@ -35,6 +48,9 @@ import { fileURLToPath } from 'node:url';
 
 /** The root of this repository, whichever directory the module was loaded from. */
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The directory the crawler is checked out into, when nothing says otherwise. */
+const CRAWLER_DIR = process.env.CRAWLER_DIR || 'wb-parser-kotlin-new';
 
 /**
  * Every place the contract document may be, most specific first.
@@ -48,7 +64,8 @@ export function contractDocumentCandidates() {
   return [
     process.env.CONTRACT_OPENAPI_PATH,
     resolve(ROOT, 'contract', 'catalog-v1.openapi.yaml'),
-    resolve(ROOT, '..', 'wb-parser-kotlin-new', 'contract', 'catalog-v1.openapi.yaml'),
+    resolve(ROOT, '..', CRAWLER_DIR, 'contract', 'catalog-v1.openapi.yaml'),
+    resolve(ROOT, CRAWLER_DIR, 'contract', 'catalog-v1.openapi.yaml'),
   ].filter((candidate) => typeof candidate === 'string' && candidate.length > 0);
 }
 
