@@ -28,11 +28,11 @@
 # Point the suite at another image without editing this file:
 #
 #   CONTRACT_CRAWLER_IMAGE=wb-parser:local npm test
-ghcr.io/gazon1/wb-parser@sha256:2f66a4eeb274e2572370f6d9bac6a48fae9229bcb0091d8ad9f2ece79ae74bd7
+ghcr.io/gazon1/wb-parser@sha256:4aea9c78cf2443cd7e76cb89146167337652158a9b15128e089112f893e6b2e0
 
 # Updated by scripts/update-image-pin.sh — the digest of the image whose
 # compatibility run concluded 'success'. The pull request links to that run.
 #
-# crawler-commit: 907f9b4b595693c820111c848cfd626d147ebaf9
+# crawler-commit: 856c0c8b630c7ff2d3156615b69788af191095ab
 # The commit the pinned image was built from. A digest says which image
 # is pinned; this says how far the crawler's main has moved since it.
