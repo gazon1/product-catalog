@@ -25,6 +25,7 @@ tests/catalog-mapping.test.ts	14
 tests/contract-types.test.ts	7
 tests/contract-validator.test.ts	5
 tests/dependabot-bump.test.ts	7
+tests/dependency-decision.test.ts	6
 tests/format.test.ts	12
 tests/freshness.test.ts	14
 tests/image-pin.test.ts	11
