@@ -17,8 +17,16 @@
 # NEXT_PUBLIC_SITE_URL on the server: the sitemap, robots.txt and canonical
 # tags are generated from that variable, and a mismatch ships a sitemap full of
 # URLs that point nowhere.
+#
+# The domain is the site's own and nobody else's. The crawler's catalog API
+# lives on wb-parser.maxdrobin.ru, and two routes on one address do not
+# compose: Caddy merges two site blocks with the same name, and with two
+# catch-alls the upstream that answers a path depends on the order the files
+# happen to be merged in. The proxy role refuses to apply a route for an
+# address that another snippet already claims, so this file and the crawler's
+# must name different addresses.
 
-wb-parser.maxdrobin.ru {
+jellyfin.maxdrobin.ru {
     encode gzip zstd
 
     reverse_proxy product-catalog:3000 {
