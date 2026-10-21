@@ -276,20 +276,45 @@ function imageIdOf(reference: string): string | null {
  *
  * A pin that names a local tag is not pulled: there is nothing to pull it
  * from, and the tag is built by the developer's own `just app::docker-build`.
+ *
+ * The pull goes through the script the CI uses, so the two fail the same way:
+ * an anonymous pull that hits the registry's limit says so, and names the
+ * secret that ends the counting. The explanation is returned to the caller,
+ * which carries it into the failure the suite reports.
  */
-function ensureImageIsPresent(reference: string): void {
-  if (!reference.includes('@sha256:')) return;
-  if (imageIdOf(reference) !== null) return;
+function ensureImageIsPresent(reference: string): string | null {
+  if (!reference.includes('@sha256:')) return null;
+  if (imageIdOf(reference) !== null) return null;
 
   console.log(`\n  pulling ${reference}…\n`);
+  const pull = pullCrawlerImage(reference);
+  if (pull.status === 0) return null;
+  return pull.output.length > 0 ? pull.output : null;
+}
+
+/**
+ * The pull, as the CI makes it.
+ *
+ * The script's own words are kept: it is the one that knows about the
+ * registry's limit for anonymous clients and about the secret that lifts it.
+ */
+function pullCrawlerImage(reference: string): { status: number; output: string } {
   try {
-    execFileSync('docker', ['pull', reference], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'inherit', 'inherit'],
-    });
-  } catch {
-    // The failure is reported by the caller, which knows what the missing
-    // image means for the suite. This function only makes the attempt.
+    const output = execFileSync(
+      'bash',
+      [resolve(ROOT, 'scripts', 'pull-crawler-image.sh'), reference],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    return { status: 0, output: output.trim() };
+  } catch (error) {
+    const failure = error as { status?: number; stdout?: string; stderr?: string };
+    return {
+      status: failure.status ?? 1,
+      output: `${failure.stdout ?? ''}${failure.stderr ?? ''}`.trim(),
+    };
   }
 }
 
@@ -539,13 +564,17 @@ export default async function setup(): Promise<void> {
   assertDockerIsAvailable();
 
   const image = resolveCrawlerImage();
-  ensureImageIsPresent(image);
+  const pullProblem = ensureImageIsPresent(image);
   const imageId = imageIdOf(image);
 
   if (imageId === null) {
     // The image is a separate artifact from another repository. Its absence is
     // the contract test's failure, with a message that says what to do about
     // it — and the rest of the suite still runs.
+    //
+    // What the pull said about itself comes along: an anonymous pull that the
+    // registry refused because of its hourly limit is a different problem
+    // from a missing image, and the reader has to be told which one it is.
     writeHandoff({
       apiUrl: null,
       apiKey: null,
@@ -556,7 +585,8 @@ export default async function setup(): Promise<void> {
       error:
         `the crawler image "${image}" is not available locally. Pull it (docker pull ` +
         `"${image}"), build it in the crawler repository (just app::docker-build), or ` +
-        `point the suite at another one: CONTRACT_CRAWLER_IMAGE=<image> npm test`,
+        `point the suite at another one: CONTRACT_CRAWLER_IMAGE=<image> npm test` +
+        (pullProblem !== null ? `\n\n${pullProblem}` : ''),
     });
     console.log(`\n  ⚠ the crawler image "${image}" is not available — the contract test will fail\n`);
     return;
