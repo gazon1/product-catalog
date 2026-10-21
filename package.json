@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "contract-check": "vitest run tests/api-contract.test.ts",
+    "contract-check": "vitest run tests/api-contract.test.ts tests/contract/",
     "contract-types": "node scripts/generate-contract-types.mjs",
     "contract-types:check": "node scripts/generate-contract-types.mjs --check"
   },

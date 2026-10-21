@@ -30,6 +30,7 @@
 import Ajv2020 from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
 import { parse } from 'yaml';
+import type { FieldDescriptor } from '@/lib/api/types';
 import { loadContractDocument as readContractDocument } from '../../scripts/contract-document.mjs';
 
 /** Документ контракта, прочитанный с диска. */
@@ -40,6 +41,25 @@ export function loadContractDocument(): string {
 /** Документ контракта, разобранный. */
 export function parseContractDocument(): unknown {
   return parse(loadContractDocument());
+}
+
+/**
+ * Свойства, которые объявляет схема контракта, — как их зеркалит сайт.
+ *
+ * Разбор свойств нужен двум слоям проверки: полям ответа (карточка и деталь
+ * должны нести ровно то, что объявляет документ) и схеме (ответ должен быть
+ * валиден по документу целиком). Список пишется здесь один раз — иначе два
+ * слоя поймут документ по-разному, а проверять будут одно и то же.
+ */
+export function contractFields(schema: unknown): FieldDescriptor[] {
+  const properties = (schema as { properties?: Record<string, { type?: unknown }> }).properties ?? {};
+  return Object.entries(properties).map(([name, property]) => {
+    const declared = property.type;
+    const types = Array.isArray(declared) ? declared : [declared];
+    const nullable = types.includes('null');
+    const base = types.find((t) => t !== 'null') ?? 'string';
+    return { name, type: base, nullable } as FieldDescriptor;
+  });
 }
 
 /** Переписать ссылки документа на компоненты в локальный блок `$defs`. */

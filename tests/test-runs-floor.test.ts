@@ -49,7 +49,7 @@ function fixture(): string {
     resolve(dir, 'config', 'test-runs-floor.tsv'),
     [
       'tests/image-pin.test.ts\t7',
-      'tests/api-contract.test.ts\t32',
+      'tests/contract/fields.test.ts\t7',
       'tests/slug.test.ts\t14',
       '',
     ].join('\n'),
@@ -110,11 +110,11 @@ describe('the floor is only ever raised', () => {
     expect(floors['tests/image-pin.test.ts']).toBe('10');
     // The file that did not run keeps the floor it had — this is the whole
     // point: a floor that is gone cannot catch a file that stopped running.
-    expect(floors['tests/api-contract.test.ts']).toBe('32');
+    expect(floors['tests/contract/fields.test.ts']).toBe('7');
     expect(floors['tests/slug.test.ts']).toBe('14');
     // And the file that ran was raised, not left behind.
     expect(Object.keys(floors).sort()).toEqual([
-      'tests/api-contract.test.ts',
+      'tests/contract/fields.test.ts',
       'tests/image-pin.test.ts',
       'tests/slug.test.ts',
     ]);
