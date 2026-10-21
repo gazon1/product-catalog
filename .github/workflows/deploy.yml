@@ -174,11 +174,22 @@ jobs:
           APP_DIR: ${{ secrets.VPS_APP_DIR }}
           CRAWLER_API_KEY: ${{ secrets.CRAWLER_API_KEY }}
           CRAWLER_API_URL: ${{ vars.CRAWLER_API_URL || 'http://wb-parser:8080' }}
+          # The site's own public address — the same value the route names and
+          # the smoke test asks. The sitemap, robots.txt and the canonical
+          # tags are built from it, so a value that is not the address the
+          # route serves ships a sitemap full of links that point nowhere.
+          PUBLIC_URL: ${{ vars.PUBLIC_URL }}
         run: |
           if [ -z "${CRAWLER_API_KEY:-}" ]; then
             echo "::error::The secret CRAWLER_API_KEY is not set."
             echo "::error::Without it the storefront starts with no key for the catalog and answers 503 — honestly, and with nothing to show."
             echo "::error::The value is the crawler's own CATALOG_API_KEY: the same key in two places, and the crawler accepts a list, so a rotation can add the new key first."
+            exit 1
+          fi
+          if [ -z "${PUBLIC_URL:-}" ]; then
+            echo "::error::The repository variable PUBLIC_URL is not set."
+            echo "::error::It is the site's own address: the route serves it, and the sitemap and the canonical tags are built from it."
+            echo "::error::Set it in Settings → Secrets and variables → Actions → Variables."
             exit 1
           fi
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<EOF
@@ -189,7 +200,7 @@ jobs:
           # else the server needs stay as they were.
           umask 077
           if [ -f .env ]; then
-            grep -vE '^(CRAWLER_API_URL|CRAWLER_API_KEY)=' .env > .env.new || true
+            grep -vE '^(CRAWLER_API_URL|CRAWLER_API_KEY|NEXT_PUBLIC_SITE_URL)=' .env > .env.new || true
           else
             : > .env.new
           fi
@@ -199,6 +210,11 @@ jobs:
             echo "# The key never lives in the repository, and this file is not in git."
             echo "CRAWLER_API_URL=$CRAWLER_API_URL"
             echo "CRAWLER_API_KEY=$CRAWLER_API_KEY"
+            echo ""
+            echo "# The site's own address, written here so that the sitemap, the"
+            echo "# robots.txt and the canonical tags name the address that is"
+            echo "# actually served. One variable, one address."
+            echo "NEXT_PUBLIC_SITE_URL=$PUBLIC_URL"
           } >> .env.new
           mv .env.new .env
           chmod 600 .env
