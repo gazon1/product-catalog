@@ -125,7 +125,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          deadline=$(( $(date + %s) + 1800 ))
+          deadline=$(( $(date +%s) + 1800 ))
           while true; do
             waiting=0
             while read -r number; do
@@ -156,7 +156,7 @@ jobs:
             if [ "$waiting" -eq 0 ]; then
               exit 0
             fi
-            if [ "$(date + %s)" -ge "$deadline" ]; then
+            if [ "$(date +%s)" -ge "$deadline" ]; then
               echo "::error::the checks did not become green in time"
               exit 1
             fi
