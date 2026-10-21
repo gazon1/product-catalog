@@ -38,6 +38,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STACK_DIR="$ROOT/.stack"
 LOG_DIR="$STACK_DIR/logs"
 
+# Every Docker call is bounded: a daemon that does not answer has to say so
+# instead of hanging the script.
+. "$ROOT/scripts/docker-timeout.sh"
+
 PURGE=0
 for arg in "$@"; do
     case "$arg" in
@@ -119,8 +123,18 @@ step "Crawler"
 #
 # A crawler left running holds pooled connections to the dev database, so it is
 # stopped before the database.
-if docker ps --format '{{.Names}}' | grep -qx "product-catalog-dev-parser"; then
-    (cd "$ROOT" && docker compose -f docker-compose.dev.yml stop wb-parser >/dev/null)
+#
+# The names of the running containers are read once, and a Docker daemon that
+# does not answer is an error — not a list of nothing. "Nothing is running" and
+# "we could not ask" are different states, and only one of them means the
+# stack is down.
+if ! running_containers="$(docker_bounded ps --format '{{.Names}}')"; then
+    die "the Docker daemon does not answer — the stack was not stopped"
+fi
+
+if printf '%s\n' "$running_containers" | grep -qx "product-catalog-dev-parser"; then
+    (cd "$ROOT" && docker_bounded compose -f docker-compose.dev.yml stop wb-parser >/dev/null) \
+        || die "the crawler container was not stopped"
     ok "crawler stopped"
 else
     warn "crawler not running"
@@ -161,12 +175,14 @@ clear_port "${STACK_SITE_PORT:-3000}" "$SITE_MATCH\|next-server" "the storefront
 # ---- database ---------------------------------------------------------------
 
 step "Database"
-if docker ps --format '{{.Names}}' | grep -qx "product-catalog-dev-db"; then
+if printf '%s\n' "$running_containers" | grep -qx "product-catalog-dev-db"; then
     if [ "$PURGE" = "1" ]; then
-        (cd "$ROOT" && docker compose -f docker-compose.dev.yml down -v >/dev/null)
+        (cd "$ROOT" && docker_bounded compose -f docker-compose.dev.yml down -v >/dev/null) \
+            || die "the dev database and its volume were not removed"
         ok "dev database and its volume removed (--purge)"
     else
-        (cd "$ROOT" && docker compose -f docker-compose.dev.yml down >/dev/null)
+        (cd "$ROOT" && docker_bounded compose -f docker-compose.dev.yml down >/dev/null) \
+            || die "the dev database was not stopped"
         ok "dev database stopped (volume kept — use --purge to drop it)"
     fi
 else
