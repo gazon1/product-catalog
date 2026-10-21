@@ -22,6 +22,7 @@ tests/architecture/no-driver-dependency.test.ts	2
 tests/architecture/paging-bound.test.ts	3
 tests/architecture/sort-vocabulary.test.ts	4
 tests/catalog-mapping.test.ts	14
+tests/contract-types-axis.test.ts	10
 tests/contract-types.test.ts	7
 tests/contract-validator.test.ts	5
 tests/dependabot-bump.test.ts	7

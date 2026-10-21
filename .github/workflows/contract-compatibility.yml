@@ -58,6 +58,13 @@ on:
         required: false
         default: manual
         type: string
+      crawler_commit:
+        description: >-
+          The commit the image was built from, when the dispatcher did not send
+          one. The pin records it, and the types of the storefront are
+          regenerated from the contract of that commit.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -264,11 +271,62 @@ jobs:
       # this right; without it the dispatch is refused and the pull request
       # would wait for checks that never ran.
       actions: write
+    env:
+      # The directory the crawler is checked out into. The contract job uses the
+      # same name, so the two jobs read the same crawler — and the pin's types
+      # are generated from the document of the commit that job checked.
+      CRAWLER_DIR: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
 
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.site_ref || github.event.client_payload.site_ref || github.ref }}
+
+      # The crawler, at the commit the compatibility job checked.
+      #
+      # The pin names an image *and* the commit it was built from, and the
+      # storefront's types describe the contract of that commit. So the crawler
+      # is checked out here as well, at the same commit the compatibility job
+      # used: the checkout is what makes the pin's own types possible — without
+      # it the pull request would carry a digest and no types, and the types
+      # are what the storefront compiles against.
+      - name: Check out the crawler as a sibling checkout
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.CRAWLER_REPO }}
+          ref: ${{ github.event.client_payload.crawler_commit || vars.CRAWLER_REF || 'main' }}
+          path: ${{ env.CRAWLER_DIR }}
+
+      # The generator needs the packages: the types are built from the
+      # crawler's document by `openapi-typescript`, and a generator without
+      # its dependencies is a generator that cannot run.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      # The commit the pin records.
+      #
+      # The crawler sends it with the publication. When it did not — a manual
+      # run against an image the operator named — the commit of the crawler's
+      # checkout is the truth: that is the code the image was built from, and
+      # it is the contract the types have to describe. A pin that names no
+      # commit is a pin that does not say which contract it claims, so it is
+      # never written.
+      - name: The commit the pin records
+        id: crawler_commit
+        env:
+          CRAWLER_COMMIT: ${{ github.event.client_payload.crawler_commit || inputs.crawler_commit }}
+        run: |
+          set -euo pipefail
+          commit="${CRAWLER_COMMIT}"
+          if [ -z "$commit" ]; then
+            commit="$(git -C "${CRAWLER_DIR}" rev-parse HEAD)"
+          fi
+          echo "the pin records the crawler commit ${commit}"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
 
       # The runner has no git identity: a fresh checkout has none, and a commit
       # without one is refused outright ("Please tell me who you are"). The
@@ -295,7 +353,12 @@ jobs:
           # publication, and the pin records it: a digest says which image is
           # pinned, and the commit says how far the crawler's main has moved
           # since it.
-          CRAWLER_COMMIT: ${{ github.event.client_payload.crawler_commit }}
+          CRAWLER_COMMIT: ${{ steps.crawler_commit.outputs.commit }}
+          # The contract of that commit — the document the types are generated
+          # from. The pin and the types travel together, in one pull request:
+          # a pin without its types would leave the storefront compiling
+          # against a contract the pinned image no longer speaks.
+          CONTRACT_DOCUMENT: ${{ env.CRAWLER_DIR }}/contract/catalog-v1.openapi.yaml
           DISPATCH_ID: ${{ github.event.client_payload.dispatch_id }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -310,7 +373,8 @@ jobs:
             --digest "$CRAWLER_IMAGE" \
             --tag "$CRAWLER_TAG" \
             --run-id "$RUN_ID" \
-            --crawler-commit "$CRAWLER_COMMIT" || status=$?
+            --crawler-commit "$CRAWLER_COMMIT" \
+            --contract-document "$CONTRACT_DOCUMENT" || status=$?
           if [ "$status" -eq 1 ]; then
             echo "::notice::the pin does not move for a pull request's image — that is the rule, not a failure"
             exit 0
