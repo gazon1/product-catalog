@@ -95,6 +95,11 @@ export async function getProduct(id: string): Promise<ProductDetail | null> {
     return {
       ...mapCard(product),
       history: (product.history ?? []).map(mapPricePoint),
+      // Кто ответил и когда прочитаны данные — те же два поля, что и в
+      // остальных ответах каталога. Краулер, который старше контракта, их не
+      // присылает: пустая строка и null — это то, что страница рисует как «—».
+      instanceId: product.instanceId ?? '',
+      dataAsOf: product.dataAsOf ?? null,
     };
   } catch (err) {
     if (err instanceof ApiError && (err.status === 400 || err.status === 404)) return null;
