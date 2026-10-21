@@ -29,6 +29,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Every Docker call is bounded: a daemon that does not answer has to say so
+# instead of hanging the script.
+. "$ROOT/scripts/docker-timeout.sh"
+
 PURGE=0
 MODULES=0
 for arg in "$@"; do
@@ -48,10 +52,19 @@ cd "$ROOT"
 # ---- the stack --------------------------------------------------------------
 
 step "The local stack"
+# The stack is stopped first, and a failure here does not stop the rest of the
+# cleaning: the build output and the test artefacts are on this machine
+# whatever the Docker daemon is doing. The failure is reported and remembered,
+# and the script ends with a non-zero status — a clean that could not clean
+# everything must not say it did.
+stack_failed=0
 if [ "$PURGE" = "1" ]; then
-    bash scripts/stack-down.sh --purge
+    bash scripts/stack-down.sh --purge || stack_failed=1
 else
-    bash scripts/stack-down.sh
+    bash scripts/stack-down.sh || stack_failed=1
+fi
+if [ "$stack_failed" -ne 0 ]; then
+    warn "the local stack was not stopped (see above)"
 fi
 
 # ---- what the build leaves --------------------------------------------------
@@ -91,3 +104,9 @@ fi
 
 step "Done"
 echo "  the tree is clean; 'npm ci' and 'just stack-up' bring it back"
+
+if [ "$stack_failed" -ne 0 ]; then
+    echo ""
+    echo "  ⚠️  the local stack was not stopped — the tree is clean, the containers are not"
+    exit 1
+fi
