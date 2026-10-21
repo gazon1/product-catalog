@@ -93,22 +93,19 @@ build:
     npm run build
 
 # Runs the gates that CI runs, so a green local run means a green pipeline.
-# Ordered as CI orders them, not merely by cost: `contract-check` must precede
-# `test`, because it is the one that proves the crawler this storefront talks to
-# answers what the contract says — and it is also what tells the rest of the
-# suite that there is a crawler to talk to. `test-runs` must follow `test`,
-# because it reads the XML that run wrote. `build` stays last — it is the
-# expensive one.
 #
-# `contract-types-check` comes first after the typecheck: it needs nothing but
-# the contract document, so it says in a second what the rest of the run says
-# in half an hour — and a stale generated file is a failure that is invisible
-# everywhere else.
+# The gates are written down once — in config/gates.yaml — and both sides run
+# them from there through the same script. A gate that is written down twice
+# is a gate that gets updated in one of the two places, and the one nobody
+# reads is the one that rots.
 #
-[doc('Everything CI runs: typecheck, contract types, contract check, tests, test-runs, build (needs Docker and the crawler image)')]
-check: typecheck contract-types-check contract-check test test-runs build
-    @echo ""
-    @echo "✅ all checks passed"
+# The order, and why it is that order, is in the list itself.
+#
+# `just check` needs a working Docker daemon and the crawler's image: the
+# contract gates talk to the crawler.
+[doc('Everything CI runs: the gates of config/gates.yaml (needs Docker and the crawler image)')]
+check:
+    node scripts/run-gates.mjs
 
 # ==============================================================================
 # Deployment

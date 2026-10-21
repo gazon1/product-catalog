@@ -18,6 +18,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The gates, from the one list they are written down in: config/gates.yaml.
+  # The job's name is the required check of main, so it stays what it is —
+  # what runs inside it is the list, and `just check` runs the same list.
+  #
   # Fast gate first. The Docker build below takes minutes; a type error should
   # fail in seconds instead.
   typecheck-and-test:
@@ -35,9 +39,6 @@ jobs:
           cache: npm
 
       - run: npm ci --no-audit --no-fund
-
-      - name: Typecheck
-        run: npm run typecheck
 
       # The crawler is a separate repository, so a plain checkout of this one
       # cannot build its image: the build context is the crawler's own checkout,
@@ -136,8 +137,20 @@ jobs:
             docker build --file "$CRAWLER_DIR/Dockerfile.app" --tag "$IMAGE" "$CRAWLER_DIR"
           fi
 
-      - name: Unit, architecture and contract tests
-        run: npm test
+      # The gates, from the one list they are written down in. `just check`
+      # runs the same list through the same script, so a green local run and a
+      # green pipeline mean the same thing — the promise the justfile used to
+      # make in a comment while the two lists drifted apart.
+      #
+      # The token is the workflow's own, and it is there for one gate: the
+      # first one asks the repository which checks main waits for. The token
+      # of a workflow rarely has the right to read the branch protection — and
+      # when it does not, the gate says that it could not check, rather than
+      # saying that everything is in order.
+      - name: Run the gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/run-gates.mjs
 
       # How far the pin is behind the crawler's main.
       #

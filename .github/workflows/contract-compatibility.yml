@@ -130,6 +130,11 @@ jobs:
       # when the token is absent rather than failing, because a package that is
       # public does not need a secret to be pulled.
       #
+      # The pull itself goes through the same script the CI and the test suite
+      # use: without a token the pull is anonymous, and an anonymous pull can
+      # be refused by the registry's hourly limit — the script says so, and
+      # names the secret that lifts the limit.
+      #
       # A local tag is built from the crawler's checkout beside this one. The
       # dispatcher names the image it published, which is a registry reference;
       # the tag is the arrangement that works before the crawler publishes one.
@@ -137,6 +142,7 @@ jobs:
         env:
           IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
           GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_READ_USERNAME: ${{ github.actor }}
         run: |
           set -euo pipefail
           image="${IMAGE:-}"
@@ -145,10 +151,7 @@ jobs:
             exit 1
           fi
           if [[ "$image" == *@sha256:* ]]; then
-            if [ -n "${GHCR_READ_TOKEN:-}" ]; then
-              echo "$GHCR_READ_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
-            fi
-            docker pull "$image"
+            bash scripts/pull-crawler-image.sh "$image"
           else
             docker build --file "$CRAWLER_DIR/Dockerfile.app" --tag "$image" "$CRAWLER_DIR"
           fi
