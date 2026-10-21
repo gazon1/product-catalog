@@ -70,7 +70,7 @@ export interface FieldDescriptor {
  *
  * The contract marks a nullable property as *optional* — "it may be null, and
  * it may be absent". The site has always treated such a property as *present
- * but null*: the mappers in `src/lib/queries.ts` turn an absent field into an
+ * but null*: the mappers in `src/lib/catalog/mapping.ts` turn an absent field into an
  * explicit `null` before anything else sees it, and the components compare
  * against `null` rather than against absence. `Required` is what reconciles
  * the two vocabularies — the property is required here and nullable there,

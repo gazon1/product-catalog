@@ -10,10 +10,19 @@
 # Raise in the same commit that adds tests. Lowering is allowed only when
 # tests are genuinely deleted, and the commit should say which.
 
-tests/api-client.test.ts	49
+tests/api-client-params.test.ts	15
+tests/api-client-response.test.ts	13
+tests/api-client-retry-wait.test.ts	9
+tests/api-client-retry.test.ts	7
+tests/api-client-transport.test.ts	17
 tests/api-contract.test.ts	32
-tests/architecture.test.ts	23
+tests/architecture/no-database.test.ts	14
+tests/architecture/no-driver-dependency.test.ts	2
+tests/architecture/paging-bound.test.ts	3
+tests/architecture/sort-vocabulary.test.ts	4
+tests/catalog-mapping.test.ts	12
 tests/contract-types.test.ts	7
+tests/contract-validator.test.ts	5
 tests/dependabot-bump.test.ts	7
 tests/format.test.ts	12
 tests/image-pin.test.ts	11
