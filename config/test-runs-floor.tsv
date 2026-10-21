@@ -17,6 +17,7 @@ tests/api-client-retry.test.ts	7
 tests/api-client-transport.test.ts	17
 tests/api-contract.test.ts	32
 tests/architecture.test.ts	23
+tests/catalog-mapping.test.ts	12
 tests/contract-types.test.ts	7
 tests/contract-validator.test.ts	5
 tests/dependabot-bump.test.ts	7
