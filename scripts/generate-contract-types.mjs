@@ -138,11 +138,37 @@ function propertiesOf(schema) {
 }
 
 /**
+ * The properties a composed schema adds to the one it extends.
+ *
+ * The contract declares the product detail as `allOf: [ProductCard, {...}]`:
+ * the first part is the card it extends, the rest are the detail's own
+ * properties. Those are read from the document, so a contract that grows a
+ * field grows the mirror with it.
+ *
+ * A hand-written copy of them is exactly what goes stale: the contract gained
+ * a field, the mirror did not, and the site went on validating answers
+ * against a description of the contract that no longer held.
+ */
+function ownFieldsOf(document, name) {
+  const schema = schemaOf(document, name);
+  if (!schema.allOf) return [];
+
+  const fields = [];
+  for (const part of schema.allOf) {
+    // The part that is a reference is the schema being extended — the card's
+    // own properties, which the mirror already has.
+    if (part.$ref) continue;
+    fields.push(...propertiesOf(part));
+  }
+  return fields;
+}
+
+/**
  * The properties of one schema, with the parts of a composed schema merged.
  *
- * The contract declares the product detail as `allOf: [ProductCard, {history}]`,
- * so the detail's property set is the card's plus one — the same list, not a
- * second hand-maintained copy of it.
+ * The contract declares the product detail as `allOf: [ProductCard, {...}]`,
+ * so the detail's property set is the card's plus its own — the same list, not
+ * a second hand-maintained copy of it.
  */
 function fieldsOf(document, name) {
   const schema = schemaOf(document, name);
@@ -182,14 +208,16 @@ function renderList(document, name, listName) {
 function renderDescriptors(document) {
   const blocks = SCHEMA_LISTS.map(([name, listName]) => renderList(document, name, listName));
 
-  // The detail is the card plus its history — the same list, extended, so
-  // that the two cannot drift apart.
+  // The detail is the card plus its own properties — the same list, extended,
+  // so that the two cannot drift apart. The own properties come from the
+  // document, so the mirror cannot fall behind the contract.
+  const own = ownFieldsOf(document, 'ProductDetail');
   blocks.push(
     [
-      '/** The properties of `ProductDetail`: the card\'s own, plus the history. */',
+      "/** The properties of `ProductDetail`: the card\'s own, plus its own. */",
       'export const PRODUCT_DETAIL_FIELDS = [',
       '  ...PRODUCT_CARD_FIELDS,',
-      "  { name: 'history', type: 'array', nullable: false },",
+      ...own.map(renderField),
       '] as const;',
     ].join('\n'),
   );
