@@ -62,21 +62,6 @@ clean *args:
     bash scripts/clean.sh {{args}}
 
 # ==============================================================================
-# Database maintenance
-# ==============================================================================
-# The schema copy in dev/db/ is no longer used by anything: the crawler creates
-# the schema itself, and the storefront reads it over HTTP. These two recipes
-# still exist because the copy is the rollback path's, and it is removed only
-# after the production cutover has been observed — not before.
-[doc('Copy the crawler migrations into dev/db/ and regenerate the seed (rollback path; unused by the stack)')]
-schema-sync *args:
-    bash scripts/sync-dev-schema.sh {{args}}
-
-[doc('Fail if dev/db/ no longer matches the crawler migrations (optional path to the crawler repo)')]
-schema-check *args:
-    bash scripts/check-dev-schema-sync.sh {{args}}
-
-# ==============================================================================
 # Verification
 # ==============================================================================
 [doc('Typecheck')]
@@ -120,8 +105,6 @@ build:
 # in half an hour — and a stale generated file is a failure that is invisible
 # everywhere else.
 #
-# `schema-check` is not here any more: the storefront does not apply dev/db/ as
-# its schema any more, so there is nothing for it to check against a run.
 [doc('Everything CI runs: typecheck, contract types, contract check, tests, test-runs, build (needs Docker and the crawler image)')]
 check: typecheck contract-types-check contract-check test test-runs build
     @echo ""
