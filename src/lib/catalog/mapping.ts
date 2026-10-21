@@ -77,6 +77,11 @@ export function mapPage<T>(page: Paged<T>): Paged<T> {
     totalPages: page.totalPages ?? 0,
     hasNextPage: page.hasNextPage ?? false,
     hasPrevPage: page.hasPrevPage ?? false,
+    // Кто ответил и когда прочитаны данные. Контракт требует их, но витрина
+    // может ненадолго говорить с краулером, который старше контракта: пустая
+    // строка и null — это то, что страница рисует как «—».
+    instanceId: page.instanceId ?? '',
+    dataAsOf: page.dataAsOf ?? null,
   };
 }
 
@@ -96,5 +101,10 @@ export function mapSiteStats(stats: SiteStats): SiteStats {
     withCashback: stats.withCashback ?? 0,
     productsWithCashback: stats.productsWithCashback ?? 0,
     asOf: stats.asOf ?? '',
+    // Кто ответил и когда прочитаны данные: та же осторожность, что и выше.
+    // `dataAsOf` — это момент данных, а `asOf` — момент чтения кэша; путать
+    // их нельзя, поэтому они остаются разными полями.
+    instanceId: stats.instanceId ?? '',
+    dataAsOf: stats.dataAsOf ?? null,
   };
 }
