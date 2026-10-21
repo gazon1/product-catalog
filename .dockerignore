@@ -1,8 +1,7 @@
 # Build context exclusions.
 #
-# The dev database scripts are the notable ones: dev/db/99-seed.sql is 1.8 MB of
-# generated SQL and has no business in a production image. It is used by
-# `docker-compose.dev.yml` via a bind mount, not by the image.
+# The tests are the notable ones: they carry the contract suite and the
+# fixtures, and none of it has any business in a production image.
 .git
 .gitignore
 .github
@@ -11,7 +10,6 @@ node_modules
 Dockerfile
 .dockerignore
 docker-compose*.yml
-dev
 tests
 justfile
 *.md
