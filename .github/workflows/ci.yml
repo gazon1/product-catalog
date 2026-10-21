@@ -18,6 +18,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The gates, from the one list they are written down in: config/gates.yaml.
+  # The job's name is the required check of main, so it stays what it is —
+  # what runs inside it is the list, and `just check` runs the same list.
+  #
   # Fast gate first. The Docker build below takes minutes; a type error should
   # fail in seconds instead.
   typecheck-and-test:
@@ -36,23 +40,17 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      # Runs BEFORE the tests, not after. The tests apply dev/db/ as their
-      # schema, so letting them run against a stale copy first would mean a
-      # green test run proving nothing and only the later gate noticing.
-      #
-      # The crawler's migrations are the source of truth for the dev schema.
-      # When it is absent the check fails loudly rather than skipping — a gate
-      # that reports success having verified nothing is the failure mode this
-      # whole file exists to avoid.
-      #
       # The crawler is a separate repository, so a plain checkout of this one
-      # cannot verify the sync: dev/db/ would be compared against nothing. It is
-      # fetched here as a sibling checkout, which is the layout the check
-      # expects. CRAWLER_REPO_URL is a repository variable — the crawler is
+      # cannot build its image: the build context is the crawler's own checkout,
+      # and it is fetched here as a sibling checkout, which is the layout the
+      # build expects. CRAWLER_REPO_URL is a repository variable — the crawler is
       # public, so no token is needed.
+      #
+      # The checkout is only needed for a pin that names a LOCAL TAG: such an
+      # image is built here, from this checkout. A pin that names a DIGEST is
+      # pulled from the registry and needs no checkout at all — which is why the
+      # step is conditional and why the build below says so when the checkout is
+      # missing.
       - name: Check out the crawler as a sibling checkout
         if: ${{ vars.CRAWLER_REPO_URL != '' }}
         uses: actions/checkout@v7
@@ -61,10 +59,33 @@ jobs:
           ref: ${{ vars.CRAWLER_REF || 'main' }}
           path: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
 
-      - name: Dev schema matches the crawler migrations
-        run: bash scripts/check-dev-schema-sync.sh "$CRAWLER_DIR"
-        env:
-          CRAWLER_DIR: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
+      # The pin, read once: the image and the digest it names. The digest is
+      # the cache key — the image is what the cache holds, and the digest is
+      # what says which image that is.
+      - name: Read the pin
+        id: pin
+        run: |
+          set -euo pipefail
+          image="$(grep -vE '^\s*(#|$)' contract/crawler-image.txt | head -1)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=${image##*@}" >> "$GITHUB_OUTPUT"
+
+      # The crawler's image is cached between the runs.
+      #
+      # GHCR serves anonymous clients at most 100 pulls per hour per address,
+      # and the addresses of the runners are shared — so a pull gets refused
+      # because of somebody else's run. The cache is keyed by the digest of the
+      # pin, so it holds exactly the pinned image and nothing else, and the
+      # reference is checked after the load: a cached image that does not
+      # answer to the pinned reference is worse than no cache, because the
+      # suite verifies that the container it started runs exactly the image
+      # the pin names.
+      - name: Cache the crawler image
+        id: crawler-image-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/crawler-image.tar
+          key: crawler-image-${{ steps.pin.outputs.digest }}
 
       # The contract test runs against a REAL crawler: it starts the crawler's
       # image, lets it create its own schema and seed itself, and validates every
@@ -87,20 +108,49 @@ jobs:
         env:
           CRAWLER_DIR: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
           GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_READ_USERNAME: ${{ github.actor }}
+          IMAGE: ${{ steps.pin.outputs.image }}
+          CACHE_FILE: ${{ runner.temp }}/crawler-image.tar
         run: |
           set -euo pipefail
-          image="$(grep -vE '^\s*(#|$)' contract/crawler-image.txt | head -1)"
-          if [[ "$image" == *@sha256:* ]]; then
-            if [ -n "${GHCR_READ_TOKEN:-}" ]; then
-              echo "$GHCR_READ_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+          if [[ "$IMAGE" == *@sha256:* ]]; then
+            if [ -f "$CACHE_FILE" ]; then
+              echo "restoring the crawler image from the cache"
+              docker load --input "$CACHE_FILE"
             fi
-            docker pull "$image"
+            # The reference has to resolve: the suite resolves the pin with
+            # `docker image inspect` and compares the id with the image its
+            # container actually runs. A restored image that does not answer to
+            # the pinned reference is pulled instead.
+            if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+              bash scripts/pull-crawler-image.sh "$IMAGE"
+            fi
+            if [ "${{ steps.crawler-image-cache.outputs.cache-hit }}" != "true" ]; then
+              docker save "$IMAGE" --output "$CACHE_FILE"
+            fi
           else
-            docker build --file "$CRAWLER_DIR/Dockerfile.app" --tag "$image" "$CRAWLER_DIR"
+            if [ ! -f "$CRAWLER_DIR/Dockerfile.app" ]; then
+              echo "::error::the pin names '$IMAGE', a local tag, which has to be built from the crawler's checkout — and '$CRAWLER_DIR/Dockerfile.app' is not there."
+              echo "::error::Either check the crawler out (repository variable CRAWLER_REPO_URL), or pin a digest in contract/crawler-image.txt."
+              exit 1
+            fi
+            docker build --file "$CRAWLER_DIR/Dockerfile.app" --tag "$IMAGE" "$CRAWLER_DIR"
           fi
 
-      - name: Unit, architecture and contract tests
-        run: npm test
+      # The gates, from the one list they are written down in. `just check`
+      # runs the same list through the same script, so a green local run and a
+      # green pipeline mean the same thing — the promise the justfile used to
+      # make in a comment while the two lists drifted apart.
+      #
+      # The token is the workflow's own, and it is there for one gate: the
+      # first one asks the repository which checks main waits for. The token
+      # of a workflow rarely has the right to read the branch protection — and
+      # when it does not, the gate says that it could not check, rather than
+      # saying that everything is in order.
+      - name: Run the gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/run-gates.mjs
 
       # How far the pin is behind the crawler's main.
       #
@@ -121,7 +171,12 @@ jobs:
           {
             echo "### The pin and the crawler's main"
             echo ""
-            bash scripts/pin-lag.sh --repo "$CRAWLER_REPO" --ref "$CRAWLER_REF"
+            # A report that could not be produced is a missing report, not a
+            # failed build: it says nothing about the code, and a build that
+            # fails because a report is unavailable teaches people to ignore
+            # the report.
+            bash scripts/pin-lag.sh --repo "$CRAWLER_REPO" --ref "$CRAWLER_REF" \
+              || echo "the report could not be produced"
           } >> "$GITHUB_STEP_SUMMARY"
 
   build-and-push:

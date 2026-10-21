@@ -72,6 +72,19 @@ describe('the bump in a dependency update', () => {
     expect(result.code).not.toBe(0);
   });
 
+  it('is not confused by a table in the description', () => {
+    // The header of a markdown table is `| Dependency | from | to |`, and the
+    // pair `from | to |` is not a version. Prose says nothing about the bump.
+    const body = [
+      '| Dependency | from | to |',
+      '|---|---|---|',
+      '- [foo] updates from 1.0.0 to 1.0.1',
+    ].join('\n');
+    const result = classify(body);
+    expect(result.bump).toBe('patch');
+    expect(result.code).toBe(0);
+  });
+
   it('refuses what it cannot read', () => {
     // A description without versions is not a patch. It is an unknown, and an
     // unknown is never merged by a machine.
