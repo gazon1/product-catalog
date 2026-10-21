@@ -12,9 +12,7 @@
     "test:watch": "vitest",
     "contract-check": "vitest run tests/api-contract.test.ts",
     "contract-types": "node scripts/generate-contract-types.mjs",
-    "contract-types:check": "node scripts/generate-contract-types.mjs --check",
-    "seed": "node scripts/generate-seed.mjs",
-    "sync:schema": "bash scripts/sync-dev-schema.sh"
+    "contract-types:check": "node scripts/generate-contract-types.mjs --check"
   },
   "dependencies": {
     "next": "15.4.11",
