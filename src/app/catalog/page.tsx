@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { listTargets } from '@/lib/queries';
+import { getTargetList } from '@/lib/queries';
 import { targetSlug } from '@/lib/slug';
 import { EmptyState, ErrorState } from '@/components/EmptyState';
+import { SiteFooter } from '@/components/SiteFooter';
 import { describe, plural } from '@/lib/format';
 
 export const metadata: Metadata = {
@@ -42,71 +43,85 @@ export const dynamic = 'force-dynamic';
 export default async function CatalogPage() {
   let targets;
   try {
-    targets = await listTargets();
+    targets = await getTargetList();
   } catch (err) {
     console.error('[catalog] failed to load targets', err);
     return (
-      <div className="container-page py-8">
-        <h1 className="mb-4 text-2xl font-bold text-slate-900">Каталог</h1>
-        <ErrorState message={describe(err)} />
-      </div>
+      <>
+        <div className="container-page py-8">
+          <h1 className="mb-4 text-2xl font-bold text-slate-900">Каталог</h1>
+          <ErrorState message={describe(err)} />
+        </div>
+        <SiteFooter dataAsOf={null} />
+      </>
     );
   }
 
-  if (targets.length === 0) {
+  const items = targets.items;
+
+  if (items.length === 0) {
     return (
-      <div className="container-page py-8">
-        <h1 className="mb-4 text-2xl font-bold text-slate-900">Каталог</h1>
-        <EmptyState
-          title="Каталоги не настроены"
-          hint="В базе краулера нет ни одной записи в crawl_targets. Добавьте её — и категория появится здесь автоматически."
-        />
-      </div>
+      <>
+        <div className="container-page py-8">
+          <h1 className="mb-4 text-2xl font-bold text-slate-900">Каталог</h1>
+          <EmptyState
+            title="Каталоги не настроены"
+            hint="В базе краулера нет ни одной записи в crawl_targets. Добавьте её — и категория появится здесь автоматически."
+          />
+        </div>
+        <SiteFooter dataAsOf={targets.dataAsOf} />
+      </>
     );
   }
 
-  const withData = targets.filter((t) => t.itemCount > 0);
-  const withoutData = targets.filter((t) => t.itemCount === 0);
+  const withData = items.filter((t) => t.itemCount > 0);
+  const withoutData = items.filter((t) => t.itemCount === 0);
 
   return (
-    <div className="container-page py-8">
-      <h1 className="text-2xl font-bold tracking-tight text-slate-900">Каталог</h1>
-      <p className="mt-1 text-sm text-slate-600">
-        {targets.length} {plural(targets.length, 'каталог', 'каталога', 'каталогов')} настроено
-      </p>
+    <>
+      <div className="container-page py-8">
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Каталог</h1>
+        <p className="mt-1 text-sm text-slate-600">
+          {items.length} {plural(items.length, 'каталог', 'каталога', 'каталогов')} настроено
+        </p>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {targets.map((t) => {
-          const slug = targetSlug(t.name, t.id);
-          return (
-            <Link
-              key={t.id}
-              href={`/category/${slug}`}
-              className="card flex flex-col gap-1 p-4 no-underline transition-shadow hover:shadow-md"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <span className="font-medium text-slate-900">{t.name}</span>
-                {!t.isActive && (
-                  <span className="badge shrink-0 bg-slate-100 text-slate-600 ring-slate-200">
-                    неактивен
-                  </span>
-                )}
-              </div>
-              <span className="text-sm text-slate-500">
-                {t.itemCount > 0
-                  ? `${t.itemCount.toLocaleString('ru-RU')} ${plural(t.itemCount, 'товар', 'товара', 'товаров')}`
-                  : 'пока пусто'}
-              </span>
-            </Link>
-          );
-        })}
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {items.map((t) => {
+            const slug = targetSlug(t.name, t.id);
+            return (
+              <Link
+                key={t.id}
+                href={`/category/${slug}`}
+                className="card flex flex-col gap-1 p-4 no-underline transition-shadow hover:shadow-md"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-medium text-slate-900">{t.name}</span>
+                  {!t.isActive && (
+                    <span className="badge shrink-0 bg-slate-100 text-slate-600 ring-slate-200">
+                      неактивен
+                    </span>
+                  )}
+                </div>
+                <span className="text-sm text-slate-500">
+                  {t.itemCount > 0
+                    ? `${t.itemCount.toLocaleString('ru-RU')} ${plural(t.itemCount, 'товар', 'товара', 'товаров')}`
+                    : 'пока пусто'}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+
+        {withData.length === 0 && withoutData.length > 0 && (
+          <p className="mt-6 text-sm text-slate-500">
+            Каталоги настроены, но ни один обход ещё ничего не записал.
+          </p>
+        )}
       </div>
 
-      {withData.length === 0 && withoutData.length > 0 && (
-        <p className="mt-6 text-sm text-slate-500">
-          Каталоги настроены, но ни один обход ещё ничего не записал.
-        </p>
-      )}
-    </div>
+      {/* Момент данных — из конверта ответа о целях: он несёт момент данных,
+          лежащих за счётчиками в списке. */}
+      <SiteFooter dataAsOf={targets.dataAsOf} />
+    </>
   );
 }

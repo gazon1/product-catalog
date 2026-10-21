@@ -23,7 +23,7 @@
  * первым.
  */
 
-import type { Paged, PricePoint, ProductCard, SiteStats } from '../api/types';
+import type { Paged, PricePoint, ProductCard, SiteStats, TargetList } from '../api/types';
 
 /**
  * Применить собственную заглушку сайта к заголовку, которого не дал API.
@@ -106,5 +106,25 @@ export function mapSiteStats(stats: SiteStats): SiteStats {
     // их нельзя, поэтому они остаются разными полями.
     instanceId: stats.instanceId ?? '',
     dataAsOf: stats.dataAsOf ?? null,
+  };
+}
+
+/**
+ * Ответ о целях сбора, так, как его читает страница.
+ *
+ * ## Почему момент данных едет вместе со списком
+ *
+ * Конверт `/targets` несёт `dataAsOf` — момент данных, лежащих за счётчиками
+ * в списке. Раньше витрина читала из ответа только `items`, и момент
+ * терялся по дороге: страница каталогов не могла сказать, на какой момент
+ * она показывает список. Теперь момент едет вместе со списком и рисуется
+ * подвалом страницы.
+ */
+export function mapTargetList(list: TargetList): TargetList {
+  return {
+    items: list.items ?? [],
+    asOf: list.asOf ?? '',
+    instanceId: list.instanceId ?? '',
+    dataAsOf: list.dataAsOf ?? null,
   };
 }

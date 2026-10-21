@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { SiteHeader } from '@/components/SiteHeader';
-import { SiteFooter } from '@/components/SiteFooter';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
 
@@ -46,10 +45,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </a>
 
         <SiteHeader />
+        {/* The footer is drawn by the page, not by the layout: it carries the
+            moment of the data the page itself shows, and only the page knows
+            which moment that is. The layout cannot pass it down and back up
+            again — server components pass data downwards only. */}
         <main id="main-content" className="flex-1 focus:outline-none">
           {children}
         </main>
-        <SiteFooter />
       </body>
     </html>
   );

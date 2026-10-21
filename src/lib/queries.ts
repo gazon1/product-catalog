@@ -43,6 +43,7 @@
 export {
   getProduct,
   getSiteStats,
+  getTargetList,
   listItems,
   listTargets,
   listTopDeals,
@@ -50,4 +51,4 @@ export {
 } from './catalog/requests';
 export { normalizePaging } from './api/params';
 export type { ItemFilter, Paging } from './api/params';
-export type { SiteStats } from './api/types';
+export type { SiteStats, TargetList } from './api/types';

@@ -16,8 +16,15 @@ import {
   type Paging,
 } from '../api/params';
 import { DEFAULT_PAGE_SIZE, DEFAULT_SORT, type SortOrder } from '../api/sort';
-import type { Paged, ProductCard, ProductDetail, SiteStats, TargetSummary } from '../api/types';
-import { mapCard, mapPage, mapPricePoint, mapSiteStats } from './mapping';
+import type {
+  Paged,
+  ProductCard,
+  ProductDetail,
+  SiteStats,
+  TargetList,
+  TargetSummary,
+} from '../api/types';
+import { mapCard, mapPage, mapPricePoint, mapSiteStats, mapTargetList } from './mapping';
 
 /**
  * Бюджет на соединение для чтения каталога.
@@ -63,6 +70,29 @@ export async function listItems(options: {
 }
 
 /**
+ * Ответ о целях сбора целиком: и сами цели, и два момента ответа.
+ *
+ * ## Почему конверт, а не список
+ *
+ * Ответ `/targets` несёт наряду со списком `asOf`, `instanceId` и `dataAsOf`.
+ * Список без конверта — это потерянный по дороге момент данных: страница
+ * каталогов показывала бы список, не умея сказать, на какой момент он.
+ *
+ * ## Почему `listTargets` остаётся списком
+ *
+ * Список нужен там, где нужны сами цели (страница категории ищет по нему
+ * цель, карта сайта — те, у которых есть данные), а конверт — там, где нужен
+ * момент. Обе формы читаются одним запросом; различается только то, что
+ * страница с ним делает.
+ */
+export async function getTargetList(): Promise<TargetList> {
+  const body = await apiGet<TargetList>('/targets', {
+    connectTimeoutMs: CATALOG_CONNECT_TIMEOUT_MS,
+  });
+  return mapTargetList(body);
+}
+
+/**
  * Все цели сбора вместе с количеством товаров в каждой.
  *
  * Количество товаров в цели считает сам краулер и кэширует у себя: сайт раньше
@@ -70,10 +100,8 @@ export async function listItems(options: {
  * запрос здесь, который не масштабировался сам собой.
  */
 export async function listTargets(): Promise<TargetSummary[]> {
-  const body = await apiGet<{ items: TargetSummary[] }>('/targets', {
-    connectTimeoutMs: CATALOG_CONNECT_TIMEOUT_MS,
-  });
-  return body.items ?? [];
+  const list = await getTargetList();
+  return list.items;
 }
 
 /**

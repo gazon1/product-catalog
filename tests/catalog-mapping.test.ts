@@ -16,8 +16,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mapCard, mapPage, mapPricePoint, mapSiteStats } from '@/lib/catalog/mapping';
-import type { Paged, PricePoint, ProductCard, SiteStats } from '@/lib/api/types';
+import { mapCard, mapPage, mapPricePoint, mapSiteStats, mapTargetList } from '@/lib/catalog/mapping';
+import type { Paged, PricePoint, ProductCard, SiteStats, TargetList, TargetSummary } from '@/lib/api/types';
 
 /** Карточка, у которой есть всё, кроме одной испорченной детали. */
 function card(overrides: Partial<ProductCard> = {}): ProductCard {
@@ -192,5 +192,39 @@ describe('the counters of the whole catalog as the page reads them', () => {
     const mapped = mapSiteStats({ asOf: undefined } as unknown as SiteStats);
 
     expect(mapped.asOf).toBe('');
+  });
+});
+
+describe('the answer about the targets as the page reads it', () => {
+  it('keeps the targets and the moments of the answer', () => {
+    // Конверт `/targets` несёт момент данных. Раньше витрина читала из ответа
+    // только список, и момент терялся по дороге: страница каталогов не могла
+    // сказать, на какой момент она показывает список.
+    const target: TargetSummary = {
+      id: '33333333-3333-4333-8333-333333333333',
+      name: 'Чайники',
+      rootCategoryName: 'Дом',
+      isActive: true,
+      itemCount: 3,
+      newestScrapedAt: '2024-05-06T07:08:09Z',
+    };
+
+    const list: TargetList = {
+      items: [target],
+      asOf: '2024-05-06T07:08:09Z',
+      instanceId: 'instance-1',
+      dataAsOf: '2024-05-06T07:00:00Z',
+    };
+
+    expect(mapTargetList(list)).toEqual(list);
+  });
+
+  it('falls back to an empty list and to no moment when the answer has none', () => {
+    const mapped = mapTargetList({} as TargetList);
+
+    expect(mapped.items).toEqual([]);
+    expect(mapped.asOf).toBe('');
+    expect(mapped.instanceId).toBe('');
+    expect(mapped.dataAsOf).toBeNull();
   });
 });
