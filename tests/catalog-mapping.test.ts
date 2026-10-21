@@ -135,6 +135,8 @@ describe('the paged envelope as the page reads it', () => {
       totalPages: 5,
       hasNextPage: true,
       hasPrevPage: true,
+      instanceId: 'instance-1',
+      dataAsOf: '2024-05-06T07:08:09Z',
     };
 
     expect(mapPage(page)).toEqual(page);
@@ -164,6 +166,8 @@ describe('the counters of the whole catalog as the page reads them', () => {
       withCashback: 80,
       productsWithCashback: 20,
       asOf: '2024-05-06T07:08:09Z',
+      instanceId: 'instance-1',
+      dataAsOf: '2024-05-06T07:08:09Z',
     };
 
     expect(mapSiteStats(stats)).toEqual(stats);

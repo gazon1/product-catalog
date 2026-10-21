@@ -37,7 +37,7 @@
  * document always produces this file, byte for byte.
  *
  * The document this file was generated from has the fingerprint
- * `bca08996ea763d2db65ab5be653dfe875b23244e3f54804c3e8dd165c6e05b51`.
+ * `9daf590c466f63b85328265c51ea4be15f7a33dd928ce41522592315e00a9e0a`.
  */
 export interface paths {
     "/targets": {
@@ -52,7 +52,8 @@ export interface paths {
          * @description A full pass over the read model — the current observation of each product —
          *     grouped per target. It is the one aggregate that does not scale for free, so
          *     the API caches it for ten minutes rather than recomputing it per request,
-         *     and the answer says when it was computed.
+         *     and the answer says when it was computed (`asOf`) and when the data behind
+         *     the counts was observed (`dataAsOf`).
          */
         get: operations["listTargets"];
         put?: never;
@@ -148,6 +149,11 @@ export interface paths {
          *
          *     The aggregate is cached for ten minutes, so the answer carries `asOf` — the
          *     moment the counters were computed.
+         *
+         *     It also carries `dataAsOf` — the moment the data behind the counters is
+         *     about — and `instanceId` — the instance that answered. The two moments are
+         *     different axes: the counters are recomputed every ten minutes while the
+         *     data stands still until the crawler observes something newer.
          */
         get: operations["getStats"];
         put?: never;
@@ -293,6 +299,18 @@ export interface components {
              *     that crosses targets is not the history of a product.
              */
             history: components["schemas"]["PricePoint"][];
+            /**
+             * @description The id of the process instance that answered. The catalog's cache and
+             *     its rate limit live in the process, so a second instance would answer
+             *     with different numbers — and nothing else would say so. It is the same
+             *     value the readiness check reports as `checks.instance`.
+             */
+            instanceId: string;
+            /**
+             * Format: date-time
+             * @description The moment the data in this answer is about: the newest observation it carries — the row itself or the newest row of its history. It is not the moment the answer was read.
+             */
+            dataAsOf?: string | null;
         };
         PricePoint: {
             /** Format: date-time */
@@ -322,6 +340,18 @@ export interface components {
             totalPages: number;
             hasNextPage: boolean;
             hasPrevPage: boolean;
+            /**
+             * @description The id of the process instance that answered. The catalog's cache and its
+             *     rate limit live in the process, so a second instance would answer with
+             *     different numbers — and nothing else would say so. It is the same value the
+             *     readiness check reports as `checks.instance`.
+             */
+            instanceId: string;
+            /**
+             * Format: date-time
+             * @description The moment the data on this page is about: the newest observation among the products the page returns. The list is read live, so there is no cached moment to report — the moment of the data is the only moment there is. Null when the page is empty.
+             */
+            dataAsOf?: string | null;
         };
         SiteStats: {
             /** @description How many price observations the catalog holds. The crawler stores one row per (target, product, price) — a price change writes a new row and keeps the old one, because the price history is made of those rows. This is the number of those rows, not the number of products. */
@@ -337,9 +367,21 @@ export interface components {
             productsWithCashback: number;
             /**
              * Format: date-time
-             * @description The moment the counters were computed. The aggregate is cached for ten minutes, so a counter without a moment is a counter of unknown age.
+             * @description The moment the counters were computed — the moment the aggregate was read from the cache. The aggregate is cached for ten minutes, so a counter without a moment is a counter of unknown age. It is not the moment of the data: that is `dataAsOf`.
              */
             asOf: string;
+            /**
+             * @description The id of the process instance that answered. The catalog's cache and its
+             *     rate limit live in the process, so a second instance would answer with
+             *     different numbers — and nothing else would say so. It is the same value the
+             *     readiness check reports as `checks.instance`.
+             */
+            instanceId: string;
+            /**
+             * Format: date-time
+             * @description The moment the data behind the counters is about: the newest observation among the products the counters counted. It is a different axis from `asOf`, which says when the counters were computed — for this aggregate the two are the same instant, and they are named apart, because a counter and an axis of the answer are different things. Null when the catalog holds nothing yet.
+             */
+            dataAsOf?: string | null;
         };
     };
     responses: {
@@ -434,9 +476,21 @@ export interface operations {
                         items: components["schemas"]["TargetSummary"][];
                         /**
                          * Format: date-time
-                         * @description The moment the counts were computed. The aggregate is cached for ten minutes, so a count without a moment is a count of unknown age.
+                         * @description The moment the counts were computed — the moment the aggregate was read from the cache. The aggregate is cached for ten minutes, so a count without a moment is a count of unknown age. It is not the moment of the data: that is `dataAsOf`.
                          */
                         asOf: string;
+                        /**
+                         * @description The id of the process instance that answered. The catalog's cache
+                         *     and its rate limit live in the process, so a second instance would
+                         *     answer with different numbers — and nothing else would say so. It
+                         *     is the same value the readiness check reports as `checks.instance`.
+                         */
+                        instanceId: string;
+                        /**
+                         * Format: date-time
+                         * @description The moment the data behind the counts is about: the newest observation among the products the targets hold. It is a different axis from `asOf`, which says when the counts were computed. Null when the catalog holds nothing yet.
+                         */
+                        dataAsOf?: string | null;
                     };
                 };
             };
@@ -710,7 +764,7 @@ export interface operations {
  * every change to it — a retyped field, a renamed property, and a comment
  * that changes what the contract says.
  */
-export const CONTRACT_DOCUMENT_SHA256 = 'bca08996ea763d2db65ab5be653dfe875b23244e3f54804c3e8dd165c6e05b51';
+export const CONTRACT_DOCUMENT_SHA256 = '9daf590c466f63b85328265c51ea4be15f7a33dd928ce41522592315e00a9e0a';
 
 /** The properties of `ProductCard`, as the contract describes them. */
 export const PRODUCT_CARD_FIELDS = [
@@ -757,6 +811,8 @@ export const PAGED_FIELDS = [
   { name: 'totalPages', type: 'integer', nullable: false },
   { name: 'hasNextPage', type: 'boolean', nullable: false },
   { name: 'hasPrevPage', type: 'boolean', nullable: false },
+  { name: 'instanceId', type: 'string', nullable: false },
+  { name: 'dataAsOf', type: 'string', nullable: true },
 ] as const;
 
 /** The properties of `SiteStats`, as the contract describes them. */
@@ -768,6 +824,8 @@ export const SITE_STATS_FIELDS = [
   { name: 'withCashback', type: 'integer', nullable: false },
   { name: 'productsWithCashback', type: 'integer', nullable: false },
   { name: 'asOf', type: 'string', nullable: false },
+  { name: 'instanceId', type: 'string', nullable: false },
+  { name: 'dataAsOf', type: 'string', nullable: true },
 ] as const;
 
 /** The properties of `Error`, as the contract describes them. */
