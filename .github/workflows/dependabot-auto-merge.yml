@@ -95,8 +95,6 @@ jobs:
 
       # The bump is a patch or a minor: those merge themselves. A major is a
       # decision — but a decision may already have been made and recorded, and
-      # The bump is a patch or a minor: those merge themselves. A major is a
-      # decision — but a decision may already have been made and recorded, and
       # then the question is not open any more. The workflow says which of the
       # two it is, and the table says why.
       #
