@@ -50,6 +50,7 @@ import {
   SITE_STATS_FIELDS as GENERATED_SITE_STATS_FIELDS,
   TARGET_SUMMARY_FIELDS as GENERATED_TARGET_SUMMARY_FIELDS,
   type components,
+  type operations,
 } from './types.generated';
 
 /** The JSON types the contract uses. `integer` and `number` are distinct on purpose. */
@@ -119,6 +120,23 @@ export type Paged<T> = Omit<Present<components['schemas']['PagedProductCard']>, 
 
 /** One page of product cards — the contract's `PagedProductCard`, in the site's vocabulary. */
 export type PagedProductCard = Paged<ProductCard>;
+
+/**
+ * Ответ краулера о целях сбора: сами цели и два момента ответа.
+ *
+ * ## Почему это не просто список
+ *
+ * Конверт `/targets` несёт `asOf`, `instanceId` и `dataAsOf` — те же поля,
+ * что и любой другой ответ каталога. Раньше витрина читала из ответа только
+ * `items` и молча теряла момент данных: страница каталогов показывала
+ * список, а сказать, на какой момент этот список, было нечем.
+ *
+ * Тип выведен из документа контракта, а не написан руками: ещё одно рукопись
+ * — ещё одно место, где можно разойтись с краулером.
+ */
+export type TargetList = Present<
+  operations['listTargets']['responses'][200]['content']['application/json']
+>;
 
 /**
  * A product card plus the price history of the product inside its own target.

@@ -10,6 +10,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { SortSelect } from '@/components/SortSelect';
 import { BreadcrumbBar } from '@/components/BreadcrumbBar';
 import { EmptyState, ErrorState } from '@/components/EmptyState';
+import { SiteFooter } from '@/components/SiteFooter';
 import { describe, plural } from '@/lib/format';
 
 /**
@@ -114,10 +115,13 @@ export default async function CategoryPage({ params, searchParams }: Props) {
   } catch (err) {
     console.error('[category] failed to load targets', err);
     return (
-      <div className="container-page py-8">
-        <BreadcrumbBar crumbs={[{ label: 'Категория' }]} />
-        <ErrorState message={describe(err)} />
-      </div>
+      <>
+        <div className="container-page py-8">
+          <BreadcrumbBar crumbs={[{ label: 'Категория' }]} />
+          <ErrorState message={describe(err)} />
+        </div>
+        <SiteFooter dataAsOf={null} />
+      </>
     );
   }
 
@@ -143,10 +147,13 @@ export default async function CategoryPage({ params, searchParams }: Props) {
   } catch (err) {
     console.error('[category] failed to load items', err);
     return (
-      <div className="container-page py-8">
-        <BreadcrumbBar crumbs={[{ label: target.name }]} />
-        <ErrorState message={describe(err)} />
-      </div>
+      <>
+        <div className="container-page py-8">
+          <BreadcrumbBar crumbs={[{ label: target.name }]} />
+          <ErrorState message={describe(err)} />
+        </div>
+        <SiteFooter dataAsOf={null} />
+      </>
     );
   }
 
@@ -162,51 +169,59 @@ export default async function CategoryPage({ params, searchParams }: Props) {
   const hasActiveFilters = Object.values(linkParams).some((v) => v !== undefined);
 
   return (
-    <div className="container-page py-6">
-      <BreadcrumbBar
-        crumbs={[
-          ...(target.rootCategoryName ? [{ label: target.rootCategoryName, href: '/catalog' }] : []),
-          { label: target.name },
-        ]}
-      />
-
-      <header className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">{target.name}</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          {data.totalCount.toLocaleString('ru-RU')}{' '}
-          {plural(data.totalCount, 'товар', 'товара', 'товаров')}
-          {hasActiveFilters && ' (с учётом фильтров)'}
-        </p>
-      </header>
-
-      <div className="mb-6 flex flex-col gap-4">
-        <FilterBar
-          action={basePath}
-          search={search}
-          minPrice={minPrice}
-          maxPrice={maxPrice}
-          minCashback={minCashback}
-          inStockOnly={inStockOnly}
+    <>
+      <div className="container-page py-6">
+        <BreadcrumbBar
+          crumbs={[
+            ...(target.rootCategoryName ? [{ label: target.rootCategoryName, href: '/catalog' }] : []),
+            { label: target.name },
+          ]}
         />
-        <SortSelect sort={sort} basePath={basePath} extraParams={linkParams} />
+
+        <header className="mb-6">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">{target.name}</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            {data.totalCount.toLocaleString('ru-RU')}{' '}
+            {plural(data.totalCount, 'товар', 'товара', 'товаров')}
+            {hasActiveFilters && ' (с учётом фильтров)'}
+          </p>
+        </header>
+
+        <div className="mb-6 flex flex-col gap-4">
+          <FilterBar
+            action={basePath}
+            search={search}
+            minPrice={minPrice}
+            maxPrice={maxPrice}
+            minCashback={minCashback}
+            inStockOnly={inStockOnly}
+          />
+          <SortSelect sort={sort} basePath={basePath} extraParams={linkParams} />
+        </div>
+
+        {data.items.length === 0 ? (
+          <EmptyState
+            title={hasActiveFilters ? 'Ничего не подошло под фильтры' : 'В этой категории пока нет товаров'}
+            hint={
+              hasActiveFilters
+                ? 'Попробуйте ослабить условия или сбросить фильтры.'
+                : 'Категория настроена в краулере, но ни один обход ещё ничего не записал.'
+            }
+            action={hasActiveFilters ? { href: basePath, label: 'Сбросить фильтры' } : undefined}
+          />
+        ) : (
+          <>
+            <ProductGrid items={data.items} />
+            <Pagination page={data} basePath={basePath} searchParams={linkParams} />
+          </>
+        )}
       </div>
 
-      {data.items.length === 0 ? (
-        <EmptyState
-          title={hasActiveFilters ? 'Ничего не подошло под фильтры' : 'В этой категории пока нет товаров'}
-          hint={
-            hasActiveFilters
-              ? 'Попробуйте ослабить условия или сбросить фильтры.'
-              : 'Категория настроена в краулере, но ни один обход ещё ничего не записал.'
-          }
-          action={hasActiveFilters ? { href: basePath, label: 'Сбросить фильтры' } : undefined}
-        />
-      ) : (
-        <>
-          <ProductGrid items={data.items} />
-          <Pagination page={data} basePath={basePath} searchParams={linkParams} />
-        </>
-      )}
-    </div>
+      {/* Момент данных — из конверта постраничного ответа: строки на экране
+          прочитаны именно в этот момент. Страница кешируется на минуту, и
+          вместе с ней кешируется этот момент: он старый ровно настолько,
+          насколько стара кешированная страница, и прятать это незачем. */}
+      <SiteFooter dataAsOf={data.dataAsOf} />
+    </>
   );
 }

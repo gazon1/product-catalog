@@ -6,6 +6,7 @@ import { BreadcrumbBar } from '@/components/BreadcrumbBar';
 import { ProductImage } from '@/components/ProductImage';
 import { PriceHistory } from '@/components/PriceHistory';
 import { OutboundLink, ProductJsonLd } from '@/components/OutboundLink';
+import { SiteFooter } from '@/components/SiteFooter';
 import { cashbackBadgeClass, cashbackLabel, cashbackTier } from '@/lib/cashback';
 import { discountPercent, effectivePriceKopecks, formatRubles, kopecksToRubles } from '@/lib/money';
 import { describe } from '@/lib/format';
@@ -117,13 +118,16 @@ export default async function ProductPage({ params }: Props) {
   } catch (err) {
     console.error('[product] failed to load', err);
     return (
-      <div className="container-page py-8">
-        <BreadcrumbBar crumbs={[{ label: 'Товар' }]} />
-        <div className="card border-rose-200 bg-rose-50 p-6">
-          <p className="font-medium text-rose-900">Не удалось загрузить товар</p>
-          <p className="mt-1 text-sm text-rose-800">{describe(err)}</p>
+      <>
+        <div className="container-page py-8">
+          <BreadcrumbBar crumbs={[{ label: 'Товар' }]} />
+          <div className="card border-rose-200 bg-rose-50 p-6">
+            <p className="font-medium text-rose-900">Не удалось загрузить товар</p>
+            <p className="mt-1 text-sm text-rose-800">{describe(err)}</p>
+          </div>
         </div>
-      </div>
+        <SiteFooter dataAsOf={null} />
+      </>
     );
   }
 
@@ -135,83 +139,89 @@ export default async function ProductPage({ params }: Props) {
   const tier = cashbackTier(product.cashbackPercent);
 
   return (
-    <div className="container-page py-6">
-      <ProductJsonLd
-        title={product.title}
-        imageUrl={product.imageUrl}
-        brand={product.brand}
-        description={product.seller ?? product.brand}
-        priceRubles={priceRubles}
-        inStock={product.inStock}
-        productUrl={product.productUrl}
-        scrapedAt={product.scrapedAt}
-      />
+    <>
+      <div className="container-page py-6">
+        <ProductJsonLd
+          title={product.title}
+          imageUrl={product.imageUrl}
+          brand={product.brand}
+          description={product.seller ?? product.brand}
+          priceRubles={priceRubles}
+          inStock={product.inStock}
+          productUrl={product.productUrl}
+          scrapedAt={product.scrapedAt}
+        />
 
-      <BreadcrumbBar
-        crumbs={[
-          { label: product.targetName, href: `/category/${targetSlug(product.targetName, product.targetId)}` },
-          { label: product.title },
-        ]}
-      />
+        <BreadcrumbBar
+          crumbs={[
+            { label: product.targetName, href: `/category/${targetSlug(product.targetName, product.targetId)}` },
+            { label: product.title },
+          ]}
+        />
 
-      <div className="grid gap-8 lg:grid-cols-5">
-        <div className="lg:col-span-2">
-          <div className="card p-4">
-            <ProductImage src={product.imageUrl} alt={product.title} brand={product.brand} />
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-4 lg:col-span-3">
-          <div>
-            <div className="mb-2 flex flex-wrap gap-2">
-              {product.cashbackPercent !== null && (
-                <span className={`badge ${cashbackBadgeClass(tier)}`}>
-                  Кэшбэк {cashbackLabel(product.cashbackPercent)}
-                </span>
-              )}
-              {discount !== null && discount > 0 && (
-                <span className="badge bg-rose-100 text-rose-800 ring-rose-200">−{discount}%</span>
-              )}
-              {product.inStock === false && (
-                <span className="badge bg-slate-100 text-slate-600 ring-slate-200">Нет в наличии</span>
-              )}
-            </div>
-
-            <h1 className="text-xl font-semibold leading-snug text-slate-900 sm:text-2xl">
-              {product.title}
-            </h1>
-
-            {(product.brand || product.seller) && (
-              <p className="mt-1 text-sm text-slate-500">
-                {[product.brand, product.seller].filter(Boolean).join(' · ')}
-              </p>
-            )}
-          </div>
-
-          <div className="card p-5">
-            <p className="text-3xl font-bold text-slate-900">{formatRubles(priceRubles)}</p>
-            {product.cashbackRubles !== null && (
-              <p className="mt-1 text-sm text-slate-600">
-                Возврат ≈ {formatRubles(product.cashbackRubles, { precise: true })} при{' '}
-                {cashbackLabel(product.cashbackPercent)}
-              </p>
-            )}
-            <p className="mt-2 text-xs text-slate-400">
-              Цена на момент обхода {formatScrapedAt(product.scrapedAt)}
-            </p>
-            <div className="mt-4">
-              <OutboundLink href={product.productUrl}>Открыть у продавца</OutboundLink>
+        <div className="grid gap-8 lg:grid-cols-5">
+          <div className="lg:col-span-2">
+            <div className="card p-4">
+              <ProductImage src={product.imageUrl} alt={product.title} brand={product.brand} />
             </div>
           </div>
 
-          <section aria-labelledby="history" className="card p-5">
-            <h2 id="history" className="mb-3 text-base font-semibold text-slate-900">
-              История цены
-            </h2>
-            <PriceHistory history={product.history} />
-          </section>
+          <div className="flex flex-col gap-4 lg:col-span-3">
+            <div>
+              <div className="mb-2 flex flex-wrap gap-2">
+                {product.cashbackPercent !== null && (
+                  <span className={`badge ${cashbackBadgeClass(tier)}`}>
+                    Кэшбэк {cashbackLabel(product.cashbackPercent)}
+                  </span>
+                )}
+                {discount !== null && discount > 0 && (
+                  <span className="badge bg-rose-100 text-rose-800 ring-rose-200">−{discount}%</span>
+                )}
+                {product.inStock === false && (
+                  <span className="badge bg-slate-100 text-slate-600 ring-slate-200">Нет в наличии</span>
+                )}
+              </div>
+
+              <h1 className="text-xl font-semibold leading-snug text-slate-900 sm:text-2xl">
+                {product.title}
+              </h1>
+
+              {(product.brand || product.seller) && (
+                <p className="mt-1 text-sm text-slate-500">
+                  {[product.brand, product.seller].filter(Boolean).join(' · ')}
+                </p>
+              )}
+            </div>
+
+            <div className="card p-5">
+              <p className="text-3xl font-bold text-slate-900">{formatRubles(priceRubles)}</p>
+              {product.cashbackRubles !== null && (
+                <p className="mt-1 text-sm text-slate-600">
+                  Возврат ≈ {formatRubles(product.cashbackRubles, { precise: true })} при{' '}
+                  {cashbackLabel(product.cashbackPercent)}
+                </p>
+              )}
+              <p className="mt-2 text-xs text-slate-400">
+                Цена на момент обхода {formatScrapedAt(product.scrapedAt)}
+              </p>
+              <div className="mt-4">
+                <OutboundLink href={product.productUrl}>Открыть у продавца</OutboundLink>
+              </div>
+            </div>
+
+            <section aria-labelledby="history" className="card p-5">
+              <h2 id="history" className="mb-3 text-base font-semibold text-slate-900">
+                История цены
+              </h2>
+              <PriceHistory history={product.history} />
+            </section>
+          </div>
         </div>
       </div>
-    </div>
+
+      {/* Момент данных товара — из ответа о товаре, а не из общего счётчика:
+          у карточки своё наблюдение, и именно оно нарисовано на странице. */}
+      <SiteFooter dataAsOf={product.dataAsOf} />
+    </>
   );
 }

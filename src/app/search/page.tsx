@@ -6,6 +6,7 @@ import { Pagination } from '@/components/Pagination';
 import { FilterBar } from '@/components/FilterBar';
 import { BreadcrumbBar } from '@/components/BreadcrumbBar';
 import { EmptyState, ErrorState } from '@/components/EmptyState';
+import { SiteFooter } from '@/components/SiteFooter';
 import { describe, plural } from '@/lib/format';
 
 /**
@@ -44,6 +45,16 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
   return { title: `Поиск: ${q}`, robots: { index: false, follow: true } };
 }
 
+/**
+ * Страница поиска.
+ *
+ * ## Почему данные читает сама страница, а не отдельный компонент
+ *
+ * Раньше результаты читал дочерний компонент `SearchResults`. Теперь их читает
+ * страница: момент данных (`dataAsOf`) должен дойти до подвала, а дочерний
+ * компонент не может передать его наверх — в дереве серверных компонентов
+ * данные идут сверху вниз.
+ */
 export default async function SearchPage({ searchParams }: Props) {
   const sp = await searchParams;
   const q = readString(sp, 'q');
@@ -52,66 +63,6 @@ export default async function SearchPage({ searchParams }: Props) {
   const maxPrice = readNumber(sp, 'maxPrice');
   const minCashback = readNumber(sp, 'minCashback');
 
-  return (
-    <div className="container-page py-6">
-      <BreadcrumbBar crumbs={[{ label: q ? `Поиск: ${q}` : 'Поиск' }]} />
-
-      <h1 className="mb-1 text-2xl font-bold tracking-tight text-slate-900">
-        {q ? `Результаты: ${q}` : 'Поиск'}
-      </h1>
-      <p className="mb-6 text-sm text-slate-600">
-        Поиск идёт по названию, бренду и продавцу во всех каталогах.
-      </p>
-
-      <FilterBar action="/search" search={q} minPrice={minPrice} maxPrice={maxPrice} minCashback={minCashback} />
-
-      <div className="mt-6">
-        {q ? (
-          <SearchResults
-            q={q}
-            page={page}
-            minPrice={minPrice}
-            maxPrice={maxPrice}
-            minCashback={minCashback}
-          />
-        ) : (
-          <EmptyState title="Введите поисковый запрос" hint="Например: «кофемашина» или «Nike»." />
-        )}
-      </div>
-    </div>
-  );
-}
-
-async function SearchResults({
-  q,
-  page,
-  minPrice,
-  maxPrice,
-  minCashback,
-}: {
-  q: string;
-  page: number;
-  minPrice?: number | undefined;
-  maxPrice?: number | undefined;
-  minCashback?: number | undefined;
-}) {
-  let data;
-  try {
-    data = await listItems({
-      sort: 'CashbackPercentDesc',
-      paging: { page, pageSize: 24 },
-      filter: {
-        search: q,
-        minPriceRubles: minPrice !== undefined && minPrice >= 0 ? minPrice : undefined,
-        maxPriceRubles: maxPrice !== undefined && maxPrice >= 0 ? maxPrice : undefined,
-        minCashbackPercent: minCashback !== undefined && minCashback >= 0 ? minCashback : undefined,
-      },
-    });
-  } catch (err) {
-    console.error('[search] failed', err);
-    return <ErrorState message={describe(err)} />;
-  }
-
   const linkParams: Record<string, string | undefined> = {
     q,
     minPrice: minPrice?.toString(),
@@ -119,23 +70,71 @@ async function SearchResults({
     minCashback: minCashback?.toString(),
   };
 
-  if (data.items.length === 0) {
-    return (
-      <EmptyState
-        title="Ничего не найдено"
-        hint={`По запросу «${q}» ничего нет. База заполняется по мере обхода каталогов краулером.`}
-      />
-    );
+  let data = null;
+  let failure: unknown = null;
+
+  if (q) {
+    try {
+      data = await listItems({
+        sort: 'CashbackPercentDesc',
+        paging: { page, pageSize: 24 },
+        filter: {
+          search: q,
+          minPriceRubles: minPrice !== undefined && minPrice >= 0 ? minPrice : undefined,
+          maxPriceRubles: maxPrice !== undefined && maxPrice >= 0 ? maxPrice : undefined,
+          minCashbackPercent: minCashback !== undefined && minCashback >= 0 ? minCashback : undefined,
+        },
+      });
+    } catch (err) {
+      console.error('[search] failed', err);
+      failure = err;
+    }
   }
 
   return (
     <>
-      <p className="mb-4 text-sm text-slate-600">
-        Найдено {data.totalCount.toLocaleString('ru-RU')}{' '}
-        {plural(data.totalCount, 'товар', 'товара', 'товаров')}
-      </p>
-      <ProductGrid items={data.items} />
-      <Pagination page={data} basePath="/search" searchParams={linkParams} />
+      <div className="container-page py-6">
+        <BreadcrumbBar crumbs={[{ label: q ? `Поиск: ${q}` : 'Поиск' }]} />
+
+        <h1 className="mb-1 text-2xl font-bold tracking-tight text-slate-900">
+          {q ? `Результаты: ${q}` : 'Поиск'}
+        </h1>
+        <p className="mb-6 text-sm text-slate-600">
+          Поиск идёт по названию, бренду и продавцу во всех каталогах.
+        </p>
+
+        <FilterBar action="/search" search={q} minPrice={minPrice} maxPrice={maxPrice} minCashback={minCashback} />
+
+        <div className="mt-6">
+          {!q && (
+            <EmptyState title="Введите поисковый запрос" hint="Например: «кофемашина» или «Nike»." />
+          )}
+
+          {q && failure !== null && <ErrorState message={describe(failure)} />}
+
+          {q && failure === null && data && data.items.length === 0 && (
+            <EmptyState
+              title="Ничего не найдено"
+              hint={`По запросу «${q}» ничего нет. База заполняется по мере обхода каталогов краулером.`}
+            />
+          )}
+
+          {q && failure === null && data && data.items.length > 0 && (
+            <>
+              <p className="mb-4 text-sm text-slate-600">
+                Найдено {data.totalCount.toLocaleString('ru-RU')}{' '}
+                {plural(data.totalCount, 'товар', 'товара', 'товаров')}
+              </p>
+              <ProductGrid items={data.items} />
+              <Pagination page={data} basePath="/search" searchParams={linkParams} />
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Момент данных — из конверта постраничного ответа: без запроса момент
+          неизвестен, и подвал честно показывает прочерк. */}
+      <SiteFooter dataAsOf={data?.dataAsOf ?? null} />
     </>
   );
 }
