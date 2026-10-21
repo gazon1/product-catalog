@@ -146,7 +146,15 @@ describe('the committed types are the ones the contract describes', () => {
 
   it('describe the document’s schemas field for field', () => {
     const document = parse(loadContractDocument()) as {
-      components: { schemas: Record<string, { properties?: Record<string, unknown> }> };
+      components: {
+        schemas: Record<
+          string,
+          {
+            properties?: Record<string, unknown>;
+            allOf?: Array<{ $ref?: string; properties?: Record<string, unknown> }>;
+          }
+        >;
+      };
     };
 
     const card = contractFields(document.components.schemas.ProductCard);
@@ -162,10 +170,18 @@ describe('the committed types are the ones the contract describes', () => {
     const target = contractFields(document.components.schemas.TargetSummary);
     expect(target.map((field) => field.name)).toEqual(TARGET_SUMMARY_FIELDS.map((f) => f.name));
 
-    // The detail is the card plus its history — the same list, extended.
+    // The detail is the card plus what the detail adds — the same list,
+    // extended. What the detail adds is read from the document: a list
+    // written here is a list that goes stale when the contract grows a field,
+    // and the site then keeps validating answers against a description of the
+    // contract that no longer holds.
+    const own = (document.components.schemas.ProductDetail?.allOf ?? []).flatMap((part) =>
+      Object.keys(part.properties ?? {}),
+    );
+    expect(own).toContain('history');
     expect(PRODUCT_DETAIL_FIELDS.map((f) => f.name)).toEqual([
       ...PRODUCT_CARD_FIELDS.map((f) => f.name),
-      'history',
+      ...own,
     ]);
   });
 });

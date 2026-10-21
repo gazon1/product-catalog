@@ -120,9 +120,17 @@ export type Paged<T> = Omit<Present<components['schemas']['PagedProductCard']>, 
 /** One page of product cards — the contract's `PagedProductCard`, in the site's vocabulary. */
 export type PagedProductCard = Paged<ProductCard>;
 
-/** A product card plus the price history of the product inside its own target. */
+/**
+ * A product card plus the price history of the product inside its own target.
+ *
+ * The detail also says who answered and when the data it carries is about —
+ * the same two fields every other answer of the catalog carries, so that a
+ * page and a counter are read the same way.
+ */
 export type ProductDetail = ProductCard & {
   history: PricePoint[];
+  instanceId: string;
+  dataAsOf: string | null;
 };
 
 /**
