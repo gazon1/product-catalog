@@ -26,7 +26,7 @@
 # address that another snippet already claims, so this file and the crawler's
 # must name different addresses.
 
-jellyfin.maxdrobin.ru {
+blog.maxdrobin.ru {
     encode gzip zstd
 
     reverse_proxy product-catalog:3000 {
