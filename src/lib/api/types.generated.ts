@@ -833,8 +833,10 @@ export const ERROR_RESPONSE_FIELDS = [
   { name: 'error', type: 'string', nullable: false },
 ] as const;
 
-/** The properties of `ProductDetail`: the card's own, plus the history. */
+/** The properties of `ProductDetail`: the card's own, plus its own. */
 export const PRODUCT_DETAIL_FIELDS = [
   ...PRODUCT_CARD_FIELDS,
   { name: 'history', type: 'array', nullable: false },
+  { name: 'instanceId', type: 'string', nullable: false },
+  { name: 'dataAsOf', type: 'string', nullable: true },
 ] as const;
