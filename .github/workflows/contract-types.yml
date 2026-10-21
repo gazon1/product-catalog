@@ -31,6 +31,22 @@ name: Contract types
 # Nothing here skips. If the contract document cannot be read, the gate fails:
 # a check that verified nothing and reported success is the exact defect this
 # repository refuses to accept.
+#
+# ## Which contract is compared
+#
+# The storefront talks to the crawler **image the pin names**, not to the
+# crawler's `main`. The types describe that image's contract, so the gate
+# compares them with the contract of the commit the pin records — the commit
+# beside the digest in `contract/crawler-image.txt`.
+#
+# The two axes used to be different: the tests ran against the pin, and the
+# types were checked against the crawler's `main`. A change in the crawler's
+# contract therefore turned *every* pull request of the storefront red,
+# including the ones that have nothing to do with the contract — and a human
+# had to sort them out. Now both sides of the gate live on one axis: the types
+# describe the contract of the image this branch pins. The crawler's `main`
+# becomes the storefront's problem at the moment the pin moves — and the pin
+# moves with the types, in the same pull request.
 
 on:
   push:
@@ -74,19 +90,40 @@ jobs:
             exit 1
           fi
 
-      - name: Check out the crawler as a sibling checkout
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ vars.CRAWLER_REPO }}
-          ref: ${{ vars.CRAWLER_REF || 'main' }}
-          path: ${{ env.CRAWLER_DIR }}
-
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
 
       - run: npm ci --no-audit --no-fund
+
+      # The commit the pin names — read from the file *of this branch*, because
+      # that is the pin this pull request proposes. A pull request that moves
+      # the pin is checked against the contract of the pin it moves to.
+      #
+      # The pin that names no commit is a pin that does not say which contract
+      # it claims, and a gate that guesses one checks something else entirely.
+      # It fails here, loudly, and says what is missing.
+      - name: The crawler commit the pin names
+        id: pin
+        run: |
+          set -euo pipefail
+          commit="$(node --input-type=module -e 'import { pinnedCrawlerCommit } from "./scripts/contract-document.mjs"; process.stdout.write(pinnedCrawlerCommit() ?? "");')"
+          if [ -z "$commit" ]; then
+            echo "::error::contract/crawler-image.txt names no crawler commit." >&2
+            echo "::error::The types describe the contract of the image the pin names, and" >&2
+            echo "::error::without that commit the contract cannot be read." >&2
+            exit 1
+          fi
+          echo "the pin names the crawler commit ${commit}"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the crawler as a sibling checkout
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.CRAWLER_REPO }}
+          ref: ${{ steps.pin.outputs.commit }}
+          path: ${{ env.CRAWLER_DIR }}
 
       # The gate. It regenerates the types from the contract document and
       # fails when the result differs from the committed file — with the
@@ -96,5 +133,17 @@ jobs:
 
       # The types are only useful if they compile: a generated file that does
       # not type-check is a broken build wearing a green gate.
-      - name: Typecheck
-        run: npm run typecheck
+      #
+      # The failure names what does not compile: `tsc --noEmit` prints the file
+      # and the line, and the message says what it means — the types the pin
+      # brought do not fit the storefront's code. That is a real task, and it
+      # is visible here, in the pull request that moves the pin.
+      - name: The types compile against the storefront's code
+        run: |
+          set -euo pipefail
+          if ! npm run typecheck; then
+            echo "::error::The types generated from the crawler's contract do not compile" >&2
+            echo "::error::against the storefront's code. The compiler's output above" >&2
+            echo "::error::names the file and the line that does not compile." >&2
+            exit 1
+          fi

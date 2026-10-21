@@ -26,6 +26,20 @@
  *
  * The first candidate that exists wins, and the others are not consulted.
  *
+ * ## Which contract the storefront talks about
+ *
+ * The document alone does not say which contract it is: the crawler's `main`
+ * speaks a different one every time the crawler changes, and the storefront
+ * does not talk to the crawler's `main` — it talks to the **pin**
+ * (`contract/crawler-image.txt`). The pin names the image, and the commit
+ * beside the digest names the contract that image speaks.
+ *
+ * So the two live on one axis: the types describe the contract of the image
+ * this branch pins, and the staleness gate reads the document of *that*
+ * commit. A change in the crawler's `main` is then not the storefront's
+ * problem until the pin moves — and the pin moves with the types, in the same
+ * pull request.
+ *
  * ## Why there are two layouts
  *
  * Locally the two repositories are two directories side by side. In CI the
@@ -96,4 +110,37 @@ export function resolveContractDocumentPath() {
  */
 export function loadContractDocument() {
   return readFileSync(resolveContractDocumentPath(), 'utf8');
+}
+
+/**
+ * The pin file: where the storefront says which crawler image it talks to.
+ *
+ * @param {string} [root] — the root of the repository.
+ * @returns {string}
+ */
+export function pinFilePath(root = ROOT) {
+  return resolve(root, 'contract', 'crawler-image.txt');
+}
+
+/**
+ * The crawler commit the pin names, or null when the pin names none.
+ *
+ * The pin is the storefront's statement about which crawler it understands, and
+ * the commit beside the digest says which contract that crawler speaks. The
+ * types describe that contract, so the gate that checks the types has to read
+ * the document of *that* commit — and not of the crawler's `main`, which moves
+ * on its own and would turn every pull request of the storefront red.
+ *
+ * @param {string} [pinFile] — the pin file to read.
+ * @returns {string | null}
+ */
+export function pinnedCrawlerCommit(pinFile = pinFilePath()) {
+  if (!existsSync(pinFile)) return null;
+
+  for (const line of readFileSync(pinFile, 'utf8').split('\n')) {
+    const match = /^#\s*crawler-commit:\s*(\S+)\s*$/.exec(line.trim());
+    if (match) return match[1];
+  }
+
+  return null;
 }
