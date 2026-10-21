@@ -130,6 +130,11 @@ jobs:
       # when the token is absent rather than failing, because a package that is
       # public does not need a secret to be pulled.
       #
+      # The pull itself goes through the same script the CI and the test suite
+      # use: without a token the pull is anonymous, and an anonymous pull can
+      # be refused by the registry's hourly limit — the script says so, and
+      # names the secret that lifts the limit.
+      #
       # A local tag is built from the crawler's checkout beside this one. The
       # dispatcher names the image it published, which is a registry reference;
       # the tag is the arrangement that works before the crawler publishes one.
@@ -137,6 +142,7 @@ jobs:
         env:
           IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
           GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_READ_USERNAME: ${{ github.actor }}
         run: |
           set -euo pipefail
           image="${IMAGE:-}"
@@ -145,10 +151,7 @@ jobs:
             exit 1
           fi
           if [[ "$image" == *@sha256:* ]]; then
-            if [ -n "${GHCR_READ_TOKEN:-}" ]; then
-              echo "$GHCR_READ_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
-            fi
-            docker pull "$image"
+            bash scripts/pull-crawler-image.sh "$image"
           else
             docker build --file "$CRAWLER_DIR/Dockerfile.app" --tag "$image" "$CRAWLER_DIR"
           fi
@@ -288,6 +291,11 @@ jobs:
           PIN_BRANCH: ${{ vars.PIN_BRANCH || 'chore/pin-crawler-image' }}
           CRAWLER_IMAGE: ${{ inputs.crawler_image || github.event.client_payload.crawler_image }}
           CRAWLER_TAG: ${{ inputs.crawler_tag || github.event.client_payload.tag }}
+          # The commit the image was built from. The crawler sends it with the
+          # publication, and the pin records it: a digest says which image is
+          # pinned, and the commit says how far the crawler's main has moved
+          # since it.
+          CRAWLER_COMMIT: ${{ github.event.client_payload.crawler_commit }}
           DISPATCH_ID: ${{ github.event.client_payload.dispatch_id }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -301,7 +309,8 @@ jobs:
           bash scripts/update-image-pin.sh \
             --digest "$CRAWLER_IMAGE" \
             --tag "$CRAWLER_TAG" \
-            --run-id "$RUN_ID" || status=$?
+            --run-id "$RUN_ID" \
+            --crawler-commit "$CRAWLER_COMMIT" || status=$?
           if [ "$status" -eq 1 ]; then
             echo "::notice::the pin does not move for a pull request's image — that is the rule, not a failure"
             exit 0

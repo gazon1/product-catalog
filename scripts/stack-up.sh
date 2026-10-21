@@ -50,6 +50,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STACK_DIR="$ROOT/.stack"
 LOG_DIR="$STACK_DIR/logs"
 
+# Every Docker call is bounded: a daemon that does not answer has to say so
+# instead of hanging the script.
+. "$ROOT/scripts/docker-timeout.sh"
+
 SITE_PORT="${STACK_SITE_PORT:-3000}"
 PARSER_PORT="${STACK_PARSER_PORT:-8080}"
 CATALOG_API_KEY="${STACK_CRAWLER_API_KEY:-local-dev-catalog-key}"
@@ -110,9 +114,12 @@ launch() {
 
 step "Preflight"
 
-docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
+# The daemon is asked first and separately: a machine whose daemon does not
+# answer is a different problem from a machine that has no such image, and the
+# two must not be reported with the same words.
+docker_daemon_alive || die "the Docker daemon does not answer. Restart it: systemctl restart docker"
 
-if ! docker image inspect "$PARSER_IMAGE" >/dev/null 2>&1; then
+if ! run_bounded "$DOCKER_CALL_TIMEOUT" docker image inspect "$PARSER_IMAGE" >/dev/null 2>&1; then
     die "the crawler image '$PARSER_IMAGE' is not available locally.
        Build it in the crawler repository:  just app::docker-build
        Or point this stack at another one:  STACK_PARSER_IMAGE=<image> just stack-up"
@@ -123,7 +130,8 @@ ok "crawler image $PARSER_IMAGE"
 
 step "Database and crawler"
 
-docker compose -f "$ROOT/docker-compose.dev.yml" up -d db wb-parser >/dev/null
+docker_bounded compose -f "$ROOT/docker-compose.dev.yml" up -d db wb-parser >/dev/null \
+    || die "the database and the crawler did not start"
 ok "starting $DB_CONTAINER and $PARSER_CONTAINER"
 
 bash "$ROOT/scripts/wait-healthy.sh" "$DB_CONTAINER" 120 >/dev/null

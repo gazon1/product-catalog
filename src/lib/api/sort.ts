@@ -14,8 +14,8 @@
  * on a page a visitor opened is a broken page.
  *
  * The contract's `sort` enum and this list are compared against each other by
- * `tests/architecture.test.ts` and `tests/api-contract.test.ts`, so the two
- * cannot drift apart silently.
+ * `tests/architecture/sort-vocabulary.test.ts` and `tests/api-contract.test.ts`,
+ * so the two cannot drift apart silently.
  */
 
 /** Every sort order the site may send, in the order the UI lists them. */
@@ -61,8 +61,8 @@ export const DEFAULT_PAGE_SIZE = 24;
  *
  * The contract document, under `x-catalog-paging.maxOffset`. It is mirrored
  * here by hand, the way the shapes and the sort names are, and
- * `tests/architecture.test.ts` compares the two — so a bound that drifts in one
- * place cannot drift silently in the other.
+ * `tests/architecture/paging-bound.test.ts` compares the two — so a bound that
+ * drifts in one place cannot drift silently in the other.
  *
  * The storefront clamps to it as well as the API clamping to it. A storefront
  * that clamped to a different page than the API serves would show a page the API

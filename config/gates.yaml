@@ -1,0 +1,62 @@
+# The gates, in the order they run.
+#
+# ONE LIST. `just check` and the CI both run it from here — the CI through
+# `scripts/run-gates.mjs`, `just check` through the same script — so a green
+# local run and a green pipeline mean the same thing. A gate that is written
+# down twice is a gate that is updated in one of the two places, and the one
+# nobody reads is the one that rots.
+#
+# `scripts/check-gates.mjs` checks this wiring: it fails when the CI or the
+# justfile runs a gate on its own, and it names the gate that drifted.
+#
+# THE ORDER
+#
+# The order is the order the gates need, not merely the order of cost:
+#
+#   - `gates-agree` comes first: it costs nothing and it says whether the rest
+#     of the list is even the list the pipeline runs.
+#   - `contract-types-check` comes next: it needs nothing but the contract
+#     document, so it says in a second what the rest of the run says in half
+#     an hour — and a stale generated file is a failure that is invisible
+#     everywhere else.
+#   - `contract-check` must precede `test`, because it is the one that proves
+#     the crawler this storefront talks to answers what the contract says —
+#     and it is also what tells the rest of the suite that there is a crawler
+#     to talk to.
+#   - `test-runs` must follow `test`, because it reads the XML that run wrote.
+#   - `build` stays last — it is the expensive one.
+#
+# WHAT A GATE NEEDS
+#
+# `contract-check` and `test` need a working Docker daemon and the crawler's
+# image; the CI provides the image before the gates run, and a developer
+# provides it with `just contract-check`, which pulls it if it is missing.
+
+gates:
+  - id: gates-agree
+    command: node scripts/check-gates.mjs
+    what: the CI and `just check` run this list, and nothing else
+
+  - id: typecheck
+    command: npm run typecheck
+    what: the storefront and the tests agree about their types
+
+  - id: contract-types-check
+    command: npm run contract-types:check
+    what: the committed types still describe the crawler's contract document
+
+  - id: contract-check
+    command: npm run contract-check
+    what: the crawler this storefront talks to answers what the contract says
+
+  - id: test
+    command: npm test
+    what: the unit, architecture and contract tests
+
+  - id: test-runs
+    command: python3 scripts/check-test-runs.py
+    what: every test file really executed
+
+  - id: build
+    command: npm run build
+    what: the storefront builds
