@@ -59,3 +59,46 @@ describe('the offset bound is the contract’s offset bound', () => {
     }
   });
 });
+
+/**
+ * Границы размера страницы контракта — так, как их объявляет документ.
+ */
+function contractPageSize(path: string): { minimum?: number; maximum?: number; default?: number } {
+  const document = parseContractDocument() as {
+    paths: Record<
+      string,
+      {
+        get: {
+          parameters: Array<{
+            name: string;
+            schema: { minimum?: number; maximum?: number; default?: number };
+          }>;
+        };
+      }
+    >;
+  };
+  const parameter = document.paths[path]?.get.parameters.find((p) => p.name === 'pageSize');
+  if (!parameter) {
+    throw new Error(`the contract document does not declare a \`pageSize\` parameter for ${path}`);
+  }
+  return parameter.schema;
+}
+
+describe('the page size is the contract’s page size', () => {
+  it.each(['/items', '/top-deals'])('clamps to the size %s is served with', (path) => {
+    // Отсечение на стороне витрины и отсечение на стороне API должны давать
+    // один и тот же ответ: страница, которую витрина не прислала бы, — это
+    // страница, которой API не отдавал.
+    const bounds = contractPageSize(path);
+    expect(bounds.maximum).toBe(MAX_PAGE_SIZE);
+    expect(bounds.minimum).toBe(1);
+    expect(normalizePaging(0, 1_000_000).pageSize).toBe(MAX_PAGE_SIZE);
+    expect(normalizePaging(0, 0).pageSize).toBe(1);
+  });
+
+  it.each(['/items', '/top-deals'])('defaults to the size %s defaults to', (path) => {
+    const bounds = contractPageSize(path);
+    expect(bounds.default).toBe(DEFAULT_PAGE_SIZE);
+    expect(normalizePaging(0, Number.NaN).pageSize).toBe(DEFAULT_PAGE_SIZE);
+  });
+});

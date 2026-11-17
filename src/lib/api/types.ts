@@ -107,6 +107,9 @@ export type SiteStats = Present<components['schemas']['SiteStats']>;
 /** The error body the API returns for every non-2xx answer. */
 export type ErrorResponse = Present<components['schemas']['Error']>;
 
+/** The readiness answer: the catalog can be served. */
+export type ReadyStatus = operations['getReady']['responses'][200]['content']['application/json'];
+
 /**
  * One page of a list, with the counters the pages need to render a pager.
  *
@@ -144,12 +147,11 @@ export type TargetList = Present<
  * The detail also says who answered and when the data it carries is about —
  * the same two fields every other answer of the catalog carries, so that a
  * page and a counter are read the same way.
+ *
+ * The shape is the contract's own `ProductDetail` schema — the card plus the
+ * history — so the detail cannot drift from the card it extends.
  */
-export type ProductDetail = ProductCard & {
-  history: PricePoint[];
-  instanceId: string;
-  dataAsOf: string | null;
-};
+export type ProductDetail = Present<components['schemas']['ProductDetail']>;
 
 /**
  * The properties of `ProductCard`, as the contract describes them.

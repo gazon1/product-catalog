@@ -20,6 +20,7 @@ import type {
   Paged,
   ProductCard,
   ProductDetail,
+  ReadyStatus,
   SiteStats,
   TargetList,
   TargetSummary,
@@ -182,7 +183,7 @@ export async function ping(): Promise<boolean> {
   try {
     // Из `apiGet` есть только выход через `2xx`, значит добраться до `return`
     // — значит проверка готовности ответила 200.
-    await apiGet<{ status: string }>('/ready', {
+    await apiGet<ReadyStatus>('/ready', {
       timeoutMs: CONNECT_TIMEOUT_MS,
       connectTimeoutMs: CONNECT_TIMEOUT_MS,
     });
