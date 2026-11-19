@@ -174,7 +174,7 @@ jobs:
       # and this answer are joined by a name and not by a timestamp.
       - name: Upload the reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: contract-report-${{ env.DISPATCH_ID }}
           path: build/test-results/**
