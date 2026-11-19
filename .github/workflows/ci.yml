@@ -82,7 +82,7 @@ jobs:
       # the pin names.
       - name: Cache the crawler image
         id: crawler-image-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/crawler-image.tar
           key: crawler-image-${{ steps.pin.outputs.digest }}
