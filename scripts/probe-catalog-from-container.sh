@@ -39,11 +39,12 @@ case "$probe_timeout_ms" in
         exit 1
         ;;
 esac
-# Zero aborts every request immediately and Node refuses anything above the
-# 32-bit timer maximum — both are this deploy's misconfiguration, and both would
-# otherwise be reported as an outage of somebody else's service.
-if [ "$probe_timeout_ms" -lt 1 ] || [ "$probe_timeout_ms" -gt 4294967295 ]; then
-    echo "CRAWLER_PROBE_TIMEOUT_MS must be between 1 and 4294967295 ms, got '$probe_timeout_ms'" >&2
+# Zero aborts every request immediately, and Node clamps anything above the
+# signed 32-bit timer maximum (2147483647) to a 1 ms timeout with only a warning
+# — both are this deploy's misconfiguration, and both would otherwise be
+# reported as an outage of somebody else's service.
+if [ "$probe_timeout_ms" -lt 1 ] || [ "$probe_timeout_ms" -gt 2147483647 ]; then
+    echo "CRAWLER_PROBE_TIMEOUT_MS must be between 1 and 2147483647 ms, got '$probe_timeout_ms'" >&2
     exit 1
 fi
 
