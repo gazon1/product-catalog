@@ -132,4 +132,26 @@ describe('readiness reports the parser on its own endpoint', () => {
     expect(body.ok).toBe(false);
     expect(body.detail).toBe('timeout');
   });
+
+  // Кэш обещает, что бурст запросов — это один поход к краулеру. Без
+  // разделения запроса «в полёте» это было бы неправдой ровно в тот момент,
+  // когда запись кэша истекла — то есть когда запросы и приходят вместе.
+  it('sends one probe for a burst that arrives on an expired cache', async () => {
+    vi.useRealTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.resetModules();
+    const { GET: fresh } = await import('@/app/api/ready/route');
+
+    let probes = 0;
+    vi.stubGlobal('fetch', async () => {
+      probes += 1;
+      await new Promise((done) => setTimeout(done, 20));
+      return new Response('{"ok":true}', { status: 200 });
+    });
+
+    const answers = await Promise.all([fresh(), fresh(), fresh(), fresh(), fresh()]);
+
+    expect(probes).toBe(1);
+    for (const answer of answers) expect(answer.status).toBe(200);
+  });
 });

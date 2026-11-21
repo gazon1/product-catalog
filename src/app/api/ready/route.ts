@@ -20,6 +20,16 @@ const READINESS_TTL_MS = 5_000;
 let cached: { ok: boolean; detail: string | null; at: number } | null = null;
 
 /**
+ * The probe already in flight, if any.
+ *
+ * Without it, every request that arrives after the cache expires starts a probe
+ * of its own — and the moment the entry expires is exactly the moment a burst
+ * arrives together. The cache promises that a burst is one probe; this is what
+ * makes that promise true, and a parser outage is when it matters most.
+ */
+let inFlight: Promise<{ ok: boolean; detail: string | null }> | null = null;
+
+/**
  * Readiness: can the catalog be served?
  *
  * Returns 200 when the crawler's own readiness probe answers, and 503 when it
@@ -41,7 +51,12 @@ export async function GET() {
   const now = Date.now();
 
   if (cached === null || now - cached.at >= READINESS_TTL_MS) {
-    const answer = await ping();
+    if (inFlight === null) {
+      inFlight = ping().finally(() => {
+        inFlight = null;
+      });
+    }
+    const answer = await inFlight;
     cached = { ...answer, at: Date.now() };
   }
 
