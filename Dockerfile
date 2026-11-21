@@ -71,10 +71,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 USER nextjs
 EXPOSE 3000
 
-# Hits /api/health, which returns 503 when the catalog API is unreachable — so
-# a container that cannot reach the crawler over NetBird never reports
-# healthy, and the deploy workflow's wait-healthy step fails instead of
-# green-lighting a dead site.
+# Hits /api/health, which reports process liveness only: it answers 200 whenever
+# the Next.js server is up, whether or not the catalog API is reachable. A parser
+# outage is a dependency problem, and `/api/ready` reports it — a container that
+# restarts because somebody else's service is down only adds noise.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 

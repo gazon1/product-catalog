@@ -46,6 +46,9 @@ services:
       - "3000"
     # The crawler writes on a schedule; a site container restarting in a tight
     # loop while the catalog API is down would only add noise on that machine.
+    # So the healthcheck asks liveness only (`/api/health`); catalog readiness is
+    # `/api/ready`, for operators and the deploy workflow, and it never restarts
+    # the container.
     healthcheck:
       test:
         - CMD

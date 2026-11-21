@@ -177,9 +177,13 @@ export async function getSiteStats(): Promise<SiteStats> {
  * scraped_items LIMIT 1` — это более слабый вопрос: он говорит, что таблица
  * есть, а не что колонки, которые зовут запросы, тоже есть.
  *
+ * Это проверка зависимости, а не живости процесса: `/api/ready` отвечает ею, а
+ * `/api/health` — нет. Поэтому ответ несёт причину: «каталог недоступен» — не
+ * то, с чем оператор может что-то сделать.
+ *
  * Это никогда не бросает: проверка, которая бросает, уводит процесс за собой.
  */
-export async function ping(): Promise<boolean> {
+export async function ping(): Promise<{ ok: boolean; detail: string | null }> {
   try {
     // Из `apiGet` есть только выход через `2xx`, значит добраться до `return`
     // — значит проверка готовности ответила 200.
@@ -187,12 +191,12 @@ export async function ping(): Promise<boolean> {
       timeoutMs: CONNECT_TIMEOUT_MS,
       connectTimeoutMs: CONNECT_TIMEOUT_MS,
     });
-    return true;
+    return { ok: true, detail: null };
   } catch (err) {
     // Сообщение уже обрезано клиентом; сам объект ошибки не логируется, потому
     // что `cause` — не наше дело за него ручаться.
     const detail = err instanceof Error ? err.message : 'unknown error';
     console.error('[api] the catalog is not ready:', detail);
-    return false;
+    return { ok: false, detail };
   }
 }

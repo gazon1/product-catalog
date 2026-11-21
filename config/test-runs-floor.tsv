@@ -17,7 +17,9 @@ tests/api-client-retry.test.ts	7
 tests/api-client-secret.test.ts	8
 tests/api-client-transport.test.ts	17
 tests/api-contract.test.ts	2
+tests/api-liveness-readiness.test.ts	3
 tests/architecture/freshness-wiring.test.ts	21
+tests/architecture/liveness-wiring.test.ts	3
 tests/architecture/no-database.test.ts	14
 tests/architecture/no-driver-dependency.test.ts	2
 tests/architecture/no-parser-lifecycle.test.ts	14
