@@ -285,6 +285,25 @@ describe('the answer’s moment is read in both forms HTTP allows', () => {
     expect(retryAfterMs(new Date(now + 90_000).toUTCString(), now)).toBe(90_000);
   });
 
+  it('reads all three forms HTTP defines', () => {
+    // IMF-fixdate, rfc850 и asctime — три формы, которые называет HTTP.
+    for (const header of [
+      'Sun, 06 Nov 1994 08:49:37 GMT',
+      'Sunday, 06-Nov-94 08:49:37 GMT',
+      'Sun Nov  6 08:49:37 1994',
+    ]) {
+      expect(retryAfterMs(header, Date.parse(header) - 1_000)).toBe(1_000);
+    }
+  });
+
+  it('rejects dates that HTTP does not define', () => {
+    // `Date.parse` принял бы их — но это не `Retry-After`, и принимать их
+    // значило бы превратить мусорный заголовок в настоящее ожидание.
+    for (const header of ['1 Jan 2027', '2027-01-01', 'Jan 1 2027', '2027/01/01']) {
+      expect(retryAfterMs(header, now)).toBeNull();
+    }
+  });
+
   it('reads a moment in the past as zero, not as no moment', () => {
     // Сервер сказал «можно уже»: повтор немедленный, а не по умолчанию.
     expect(retryAfterMs('Wed, 21 Oct 2015 07:27:00 GMT', now)).toBe(0);

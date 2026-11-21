@@ -110,6 +110,16 @@ function jitter(delayMs: number): number {
 const DELAY_SECONDS = /^\d+$/;
 
 /**
+ * Три формы HTTP-date, которые определяет HTTP.
+ *
+ * `Date.parse` куда снисходительнее: `1 Jan 2027` и `2027-01-01` — для него
+ * даты, для HTTP — нет. Принять их значило бы превратить мусорный заголовок в
+ * настоящее ожидание, поэтому формы названы здесь явно.
+ */
+const HTTP_DATE =
+  /^(?:[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT|[A-Za-z]+, \d{2}-[A-Za-z]{3}-\d{2} \d{2}:\d{2}:\d{2} GMT|[A-Za-z]{3} [A-Za-z]{3} [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
+
+/**
  * Названный ответом момент, в миллисекундах, либо `null`.
  *
  * `Retry-After` приходит в двух формах: число секунд до момента и HTTP-date —
@@ -119,8 +129,8 @@ const DELAY_SECONDS = /^\d+$/;
  * чужие слова значило бы повторить раньше разрешённого, и решение об этом
  * принимает вызывающий.
  *
- * Всё остальное — пустое значение, отрицательное число, мусор — момента не
- * называет, и вызывающий берёт ожидание по умолчанию.
+ * Всё остальное — пустое значение, отрицательное число, мусор, дата не по HTTP —
+ * момента не называет, и вызывающий берёт ожидание по умолчанию.
  */
 export function retryAfterMs(header: string | null, now = Date.now()): number | null {
   if (header === null) return null;
@@ -136,9 +146,9 @@ export function retryAfterMs(header: string | null, now = Date.now()): number | 
     return Math.floor(seconds * 1000);
   }
 
-  // Буква в значении — это HTTP-date: у всех трёх форм, которые определяет
-  // HTTP, месяц назван словом. Без неё `Date.parse` принял бы за дату мусор.
-  if (!/[a-z]/i.test(text)) return null;
+  // Буква в значении — повод проверить, HTTP-date ли это. `Date.parse` один не
+  // годится: он принимает и то, что HTTP за дату не считает.
+  if (!HTTP_DATE.test(text)) return null;
   const at = Date.parse(text);
   if (!Number.isFinite(at)) return null;
 
