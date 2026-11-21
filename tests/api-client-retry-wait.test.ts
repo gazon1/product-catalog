@@ -296,6 +296,34 @@ describe('the answer’s moment is read in both forms HTTP allows', () => {
     }
   });
 
+  it('reads the rfc850 two-digit year the way HTTP does, not the way Date.parse does', () => {
+    // 69 в 2026 — это 2069: год, оказавшийся больше чем на 50 лет в будущем,
+    // означает ближайший прошлый год с теми же цифрами. `Date.parse` сказал бы
+    // 1969, и клиент повторил бы немедленно вместо ожидания.
+    const in2026 = Date.parse('Wed, 21 Oct 2026 12:00:00 GMT');
+    const expected = Date.parse('Nov 06, 2069 08:49:37 GMT') - in2026;
+
+    expect(retryAfterMs('Sunday, 06-Nov-69 08:49:37 GMT', in2026)).toBe(expected);
+    expect(retryAfterMs('Sunday, 06-Nov-50 08:49:37 GMT', in2026)).toBe(
+      Date.parse('Nov 06, 2050 08:49:37 GMT') - in2026,
+    );
+    // А год, который в будущем не оказался, читается как есть.
+    expect(retryAfterMs('Sunday, 06-Nov-94 08:49:37 GMT', in2026)).toBe(0);
+  });
+
+  it('rejects weekday names HTTP does not define', () => {
+    // `Date.parse` принимает и `Foo, 06 Nov 1994 …` — форма заголовка этого не
+    // делает, и мусор остаётся мусором.
+    for (const header of [
+      'Foo, 06 Nov 1994 08:49:37 GMT',
+      'Xyz Nov  6 08:49:37 1994',
+      'Фу, 06 Nov 1994 08:49:37 GMT',
+      'Funday, 06-Nov-94 08:49:37 GMT',
+    ]) {
+      expect(retryAfterMs(header, now)).toBeNull();
+    }
+  });
+
   it('rejects dates that HTTP does not define', () => {
     // `Date.parse` принял бы их — но это не `Retry-After`, и принимать их
     // значило бы превратить мусорный заголовок в настоящее ожидание.

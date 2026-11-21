@@ -109,15 +109,40 @@ function jitter(delayMs: number): number {
 /** Задержка в секундах — единственная форма заголовка, не требующая часов. */
 const DELAY_SECONDS = /^\d+$/;
 
+/** Дни недели, которые называет HTTP: сокращённые — IMF-fixdate и asctime, полные — rfc850. */
+const SHORT_DAYS = 'Sun|Mon|Tue|Wed|Thu|Fri|Sat';
+const LONG_DAYS = 'Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday';
+
 /**
- * Три формы HTTP-date, которые определяет HTTP.
+ * Две формы HTTP-date с четырёхзначным годом: IMF-fixdate и asctime.
  *
- * `Date.parse` куда снисходительнее: `1 Jan 2027` и `2027-01-01` — для него
- * даты, для HTTP — нет. Принять их значило бы превратить мусорный заголовок в
- * настоящее ожидание, поэтому формы названы здесь явно.
+ * `Date.parse` куда снисходительнее: `1 Jan 2027`, `2027-01-01` и `Foo, 06 Nov
+ * 1994 …` — для него даты, для HTTP — нет. Принять их значило бы превратить
+ * мусорный заголовок в настоящее ожидание, поэтому форма названа здесь явно.
+ * Третья форма, rfc850, разбирается отдельно: у неё двузначный год.
  */
-const HTTP_DATE =
-  /^(?:[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT|[A-Za-z]+, \d{2}-[A-Za-z]{3}-\d{2} \d{2}:\d{2}:\d{2} GMT|[A-Za-z]{3} [A-Za-z]{3} [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
+const HTTP_DATE = new RegExp(
+  `^(?:` +
+    `(?:${SHORT_DAYS}), \\d{2} [A-Za-z]{3} \\d{4} \\d{2}:\\d{2}:\\d{2} GMT` +
+    `|(?:${SHORT_DAYS}) [A-Za-z]{3} [ \\d]\\d \\d{2}:\\d{2}:\\d{2} \\d{4}` +
+    `)$`,
+);
+
+/** rfc850: `Sunday, 06-Nov-94 08:49:37 GMT`. */
+const RFC_850 = new RegExp(`^(?:${LONG_DAYS}), (\\d{2})-([A-Za-z]{3})-(\\d{2}) (\\d{2}:\\d{2}:\\d{2}) GMT$`);
+
+/**
+ * Какой век называет двузначный год rfc850.
+ *
+ * `Date.parse` считает `69` годом 1969 — но HTTP предписывает другое: год,
+ * оказавшийся больше чем на 50 лет в будущем, означает ближайший прошлый год с
+ * теми же двумя цифрами. Иначе `06-Nov-69` — это 2069, а не 1969, то есть
+ * просьба подождать 43 года вместо мгновенного повтора.
+ */
+function rfc850Year(yy: number, currentYear: number): number {
+  const candidate = currentYear - (currentYear % 100) + yy;
+  return candidate > currentYear + 50 ? candidate - 100 : candidate;
+}
 
 /**
  * Названный ответом момент, в миллисекундах, либо `null`.
@@ -146,8 +171,19 @@ export function retryAfterMs(header: string | null, now = Date.now()): number | 
     return Math.floor(seconds * 1000);
   }
 
-  // Буква в значении — повод проверить, HTTP-date ли это. `Date.parse` один не
-  // годится: он принимает и то, что HTTP за дату не считает.
+  // Буква в значении — повод проверить, HTTP-date ли это. Один `Date.parse` не
+  // годится: он принимает и то, что HTTP за дату не считает, а двузначный год
+  // читает по своему правилу, а не по правилу HTTP.
+  const rfc850 = RFC_850.exec(text);
+  if (rfc850) {
+    const [, day, month, yy, time] = rfc850;
+    const year = rfc850Year(Number(yy), new Date(now).getUTCFullYear());
+    // Тот же порядок, что и `Date.parse`: месяц словом, потому что `06-Nov-2069`
+    // без него читается как локальное время и съезжает на часовой пояс.
+    const at = Date.parse(`${month} ${day}, ${year} ${time} GMT`);
+    return Number.isFinite(at) ? Math.max(0, at - now) : null;
+  }
+
   if (!HTTP_DATE.test(text)) return null;
   const at = Date.parse(text);
   if (!Number.isFinite(at)) return null;
