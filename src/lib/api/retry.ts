@@ -48,12 +48,15 @@ import { request, type ApiRequestOptions, type RawAnswer } from './transport';
 const MAX_ATTEMPTS = 2;
 
 /**
- * Дольше названного момента ждать нельзя.
+ * Бюджет ожидания перед повтором.
  *
  * Серверу, который назвал момент, верят — но не без границы: вызывающий здесь
  * это отрисовка страницы, а страница, висящая минуту из-за чужого `Retry-After`,
- * хуже страницы с ошибкой. Десять секунд — это ровно один бюджет запроса;
- * более долгое ожидание не купит ничего, чего не купила бы вторая попытка.
+ * хуже страницы с ошибкой. Десять секунд — это ровно один бюджет запроса.
+ *
+ * Момент, названный за пределами бюджета, не укорачивают: ждать меньше, чем
+ * просил сервер, — это повтор раньше разрешённого. Такой ответ отдаётся как
+ * есть, и вызывающий видит его вместо повтора.
  */
 export const RETRY_AFTER_MAX_MS = 10_000;
 
@@ -103,23 +106,151 @@ function jitter(delayMs: number): number {
   return Math.floor(Math.random() * delayMs);
 }
 
+/** Задержка в секундах — единственная форма заголовка, не требующая часов. */
+const DELAY_SECONDS = /^\d+$/;
+
+/** Дни недели, которые называет HTTP: сокращённые — IMF-fixdate и asctime, полные — rfc850. */
+const SHORT_DAYS = 'Sun|Mon|Tue|Wed|Thu|Fri|Sat';
+const LONG_DAYS = 'Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday';
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** IMF-fixdate: `Wed, 21 Oct 2015 07:28:05 GMT`. Группы: день, месяц, год, чч, мм, сс. */
+const IMF_FIXDATE = new RegExp(`^(?:${SHORT_DAYS}), (\\d{2}) ([A-Za-z]{3}) (\\d{4}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$`);
+
+/** asctime: `Sun Nov  6 08:49:37 1994`. Группы: месяц, день, чч, мм, сс, год. */
+const ASCTIME = new RegExp(`^(?:${SHORT_DAYS}) ([A-Za-z]{3}) ([ \\d]\\d) (\\d{2}):(\\d{2}):(\\d{2}) (\\d{4})$`);
+
+/** rfc850: `Sunday, 06-Nov-94 08:49:37 GMT`. */
+const RFC_850 = new RegExp(`^(?:${LONG_DAYS}), (\\d{2})-([A-Za-z]{3})-(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$`);
+
 /**
- * Названный ответом момент, в миллисекундах.
+ * Момент в GMT, который называют эти компоненты, либо `null`, если такого
+ * момента в календаре нет.
  *
- * Краулер присылает число секунд до того, как можно попробовать снова, поэтому
- * заголовок — это задержка, а не метка времени. Всё остальное — нет заголовка
- * вовсе, дата, слово — момента не называет, и вызывающий берёт ожидание по
- * умолчанию.
+ * Собирается сам, а не через `Date.parse` строки, по двум причинам. asctime не
+ * несёт часового пояса, и `Date.parse` читает его как локальное время — на
+ * машине в UTC+3 это три часа в сторону, то есть повтор раньше разрешённого.
+ * А `Date.parse` нормализует несуществующие даты (`31 Feb` становится 3 марта,
+ * `07:60` — восемью часами) вместо того, чтобы их отвергнуть.
  */
-export function retryAfterMs(header: string | null): number | null {
+function httpDateAt(
+  day: string,
+  month: string,
+  year: number,
+  hour: string,
+  minute: string,
+  second: string,
+): number | null {
+  const monthIndex = MONTHS.indexOf(month);
+  if (monthIndex < 0) return null;
+
+  const components = [Number(day), Number(hour), Number(minute), Number(second)];
+  const at = new Date(Date.UTC(year, monthIndex, ...components));
+  // Компоненты, которые календарь не вместил, вернулись бы другими: `31 Feb`
+  // стал бы 3 марта, а `25:00` — следующим днём, и клиент ждал бы не тот
+  // момент. Поэтому каждый компонент сверяется с тем, что вернулось.
+  const same = [
+    at.getUTCDate(),
+    at.getUTCHours(),
+    at.getUTCMinutes(),
+    at.getUTCSeconds(),
+  ];
+  if (components.some((value, index) => value !== same[index])) return null;
+  if (at.getUTCMonth() !== monthIndex) return null;
+  return at.getTime();
+}
+
+/**
+ * Момент, который называет rfc850 с двузначным годом.
+ *
+ * `Date.parse` считает `69` годом 1969 — но HTTP предписывает другое: момент,
+ * оказавшийся больше чем на 50 лет в будущем, означает ближайший прошлый год с
+ * теми же двумя цифрами. Иначе `06-Nov-69` — это 2069, а не 1969, то есть
+ * просьба подождать 43 года.
+ *
+ * Граница считается по моменту, а не по номеру года: `06 Nov 2076` при
+ * сегодняшнем `21 Oct 2026` уже за ней, хотя год 2076 — это ровно «2026 + 50».
+ */
+function rfc850At(
+  day: string,
+  month: string,
+  yy: string,
+  hour: string,
+  minute: string,
+  second: string,
+  now: number,
+): number | null {
+  const year = new Date(now).getUTCFullYear();
+  const at = httpDateAt(day, month, year - (year % 100) + Number(yy), hour, minute, second);
+  if (at === null) return null;
+
+  const fiftyYearsOn = new Date(now);
+  fiftyYearsOn.setUTCFullYear(fiftyYearsOn.getUTCFullYear() + 50);
+  if (at <= fiftyYearsOn.getTime()) return at;
+
+  // Век назад — календарно, а не минус константа: в веке то 24, то 25
+  // високосных лет, и фиксированное число миллисекунд съехало бы на день.
+  const past = new Date(at);
+  past.setUTCFullYear(past.getUTCFullYear() - 100);
+  return past.getTime();
+}
+
+/**
+ * Названный ответом момент, в миллисекундах, либо `null`.
+ *
+ * `Retry-After` приходит в двух формах: число секунд до момента и HTTP-date —
+ * абсолютный момент. Первое — задержка, второе — метка времени, и обе означают
+ * одно: раньше этого момента спрашивать нельзя. Поэтому результат здесь —
+ * минимум, а не желаемое ожидание, и он **не ограничен** бюджетом: укоротить
+ * чужие слова значило бы повторить раньше разрешённого, и решение об этом
+ * принимает вызывающий.
+ *
+ * Всё остальное — пустое значение, отрицательное число, мусор, дата не по HTTP —
+ * момента не называет, и вызывающий берёт ожидание по умолчанию.
+ */
+export function retryAfterMs(header: string | null, now = Date.now()): number | null {
   if (header === null) return null;
   const text = header.trim();
   if (text === '') return null;
 
-  const seconds = Number(text);
-  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  if (DELAY_SECONDS.test(text)) {
+    const seconds = Number(text);
+    // Число длиннее, чем вмещает double, — это `Infinity`, а не мусор: сервер
+    // попросил ждать заведомо дольше любого бюджета, и это «не повторять», а не
+    // «заголовка нет». `null` здесь означал бы повтор через ожидание по умолчанию.
+    if (!Number.isFinite(seconds)) return Infinity;
+    return Math.floor(seconds * 1000);
+  }
 
-  return Math.min(Math.floor(seconds * 1000), RETRY_AFTER_MAX_MS);
+  // Буква в значении — повод проверить, HTTP-date ли это. Один `Date.parse` не
+  // годится: он принимает и то, что HTTP за дату не считает, двузначный год
+  // читает по своему правилу, а asctime — в поясе машины, а не в GMT.
+  const rfc850 = RFC_850.exec(text);
+  if (rfc850) {
+    const parts = rfc850.slice(1) as [string, string, string, string, string, string];
+    return since(rfc850At(...parts, now), now);
+  }
+
+  const fixdate = IMF_FIXDATE.exec(text);
+  if (fixdate) {
+    const [day, month, year, hour, minute, second] = fixdate.slice(1) as [string, string, string, string, string, string];
+    return since(httpDateAt(day, month, Number(year), hour, minute, second), now);
+  }
+
+  const asctime = ASCTIME.exec(text);
+  if (asctime) {
+    const [month, day, hour, minute, second, year] = asctime.slice(1) as [string, string, string, string, string, string];
+    return since(httpDateAt(day, month, Number(year), hour, minute, second), now);
+  }
+
+  return null;
+}
+
+/** Сколько осталось до момента; прошлый и несуществующий моменты — это `null` и `0`. */
+function since(at: number | null, now: number): number | null {
+  // Момент в прошлом — это разрешение спросить сейчас, а не запрет навсегда.
+  return at === null ? null : Math.max(0, at - now);
 }
 
 /**
@@ -145,17 +276,20 @@ export function retryAfterMs(header: string | null): number | null {
  * собственное слово сервера о том, сколько длится его отказ, и клиент,
  * который его игнорирует, превращает один отказ в два отказа в один момент.
  *
- * Ожидание дрожащее: задержка — случайная доля вычисленного ожидания, а не оно
- * само, потому что отказанные в один момент вызывающие иначе повторили бы
- * строго в общем ритме и ударили по краулеру ещё одной волной.
+ * Ожидание дрожащее: к названному моменту добавляется случайная доля, потому
+ * что отказанные в один момент вызывающие иначе повторили бы строго в общем
+ * ритме и ударили по краулеру ещё одной волной. Добавка — только сверху:
+ * названный момент это минимум, и подождать меньше него значит спросить раньше,
+ * чем сервер разрешил.
  *
  * Ответ, который не назвал момента, всё равно получает короткую паузу вместо
  * немедленного второго вопроса, а таймаут — собственный короткий откат: таймаут
  * значит, что краулер, возможно, ещё работает, и второй запрос в ту же
  * миллисекунду добавляет давления ровно тогда, когда сервис уже медленный.
  *
- * Ожидание ограничено сверху. Вызывающий не должен висеть минуту из-за того,
- * что сервер так сказал.
+ * Момент за бюджетом не укорачивают. Вызывающий не должен висеть минуту из-за
+ * того, что сервер так сказал, но и повтор раньше разрешённого — не выход:
+ * такой ответ отдаётся как есть, и вызывающий видит его вместо повтора.
  *
  * ## Что не повторяется
  *
@@ -189,7 +323,18 @@ export async function requestWithRetry(
       if (answer.status === 503 && attempt < MAX_ATTEMPTS) {
         // Краулер ответил и сказал «не сейчас». Через мгновение он вполне может
         // сказать «да», и это единственный код, ради которого такой вопрос стоит.
-        await sleeper.wait(jitter(retryAfterMs(answer.retryAfter) ?? RETRY_AFTER_DEFAULT_MS));
+        const named = retryAfterMs(answer.retryAfter);
+
+        // Ответ назвал момент — это минимум: дрожание только добавляет, а
+        // ожидание за бюджетом не укорачивают, и ответ отдаётся как есть.
+        if (named !== null) {
+          if (named > RETRY_AFTER_MAX_MS) return answer;
+          const spread = Math.min(RETRY_AFTER_DEFAULT_MS, RETRY_AFTER_MAX_MS - named);
+          await sleeper.wait(named + jitter(spread));
+          continue;
+        }
+
+        await sleeper.wait(jitter(RETRY_AFTER_DEFAULT_MS));
         continue;
       }
 
