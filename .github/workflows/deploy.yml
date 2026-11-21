@@ -197,10 +197,14 @@ jobs:
           b64_url=$(printf '%s' "$CRAWLER_API_URL" | base64 -w0)
           b64_key=$(printf '%s' "$CRAWLER_API_KEY" | base64 -w0)
           b64_public=$(printf '%s' "$PUBLIC_URL" | base64 -w0)
+          # The deploy directory travels the same way. It is a path, not a
+          # secret, but it comes from a secret, and a `$(...)` inside it would
+          # be a command on the server just the same.
+          b64_dir=$(printf '%s' "$APP_DIR" | base64 -w0)
 
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<EOF
           set -euo pipefail
-          cd "$APP_DIR"
+          cd "\$(printf '%s' '$b64_dir' | base64 -d)"
 
           # Decoded here, on the server: the encoded text is inert, the value
           # is not. A decode that fails stops the deploy — it does not write
@@ -306,37 +310,37 @@ jobs:
       # reach the crawler serves error pages while the host curls it fine.
       #
       # So the probe runs inside the container, with the container's own
-      # environment — the address and the key it was given. The key is never
-      # passed on the command line and never printed: it is read from the
-      # environment inside the container and used as a header.
+      # environment — the address and the key it was given. The policy (a refusal
+      # fails the deploy, an outage only warns) lives in the script, so that
+      # `tests/deploy-probe.test.ts` executes it instead of matching this file.
       - name: The storefront reaches the catalog API from inside the container
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
+          APP_DIR: ${{ secrets.VPS_APP_DIR }}
         run: |
-          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<'EOF'
-          set -euo pipefail
+          # Encoded for the same reason as the catalog key above: the remote
+          # script is parsed as shell, and a secret interpolated into it would be
+          # a command if it carried a `$(...)`.
+          b64_dir=$(printf '%s' "$APP_DIR" | base64 -w0)
 
-          # The same address the client builds: the prefix is added when the
-          # address does not already carry it.
-          docker exec product-catalog node -e "
-            const raw = process.env.CRAWLER_API_URL || '';
-            const base = raw.endsWith('/') ? raw.slice(0, -1) : raw;
-            const url = base.endsWith('/api/catalog/v1') ? base : base + '/api/catalog/v1';
-            fetch(url + '/ready', { headers: { 'X-Api-Key': process.env.CRAWLER_API_KEY || '' } })
-              .then((r) => { console.log('the catalog API answered', r.status); process.exit(r.ok ? 0 : 1); })
-              .catch((e) => { console.error('the catalog API is unreachable from the container:', e.message); process.exit(1); });
-          " || {
-            echo "::error::The storefront container cannot reach the catalog API."
-            echo "::error::Check that CRAWLER_API_URL is the crawler's address in the NetBird network and that the container can route to it."
-            exit 1
-          }
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<EOF
+          set -euo pipefail
+          cd "\$(printf '%s' '$b64_dir' | base64 -d)"
+
+          if [ ! -x ./scripts/probe-catalog-from-container.sh ]; then
+            chmod +x ./scripts/probe-catalog-from-container.sh
+          fi
+          ./scripts/probe-catalog-from-container.sh product-catalog
 
           # The key is a server-side secret: it must not be in the bundle that
           # the browser downloads. The container is the place where the bundle
           # actually is, so the bundle is checked where it is.
-          if docker exec product-catalog sh -c 'grep -rlF "$CRAWLER_API_KEY" /app/.next /app/server.js 2>/dev/null' | grep -q .; then
+          # The key reaches the container's own environment, so the grep reads it
+          # there — `\$` keeps it the server's variable instead of expanding it
+          # into this script on the runner.
+          if docker exec product-catalog sh -c 'grep -rlF "\$CRAWLER_API_KEY" /app/.next /app/server.js 2>/dev/null' | grep -q .; then
             echo "::error::The catalog key is in the storefront's build output. It must never reach the browser."
             exit 1
           fi
@@ -354,6 +358,11 @@ jobs:
 
       # Runs from the runner through the public domain, so it also proves Caddy,
       # TLS and the network path are healthy — not just the container.
+      #
+      # The logic lives in `scripts/smoke-test.sh` so that its policy is executed
+      # by tests rather than matched by a regex against this file: liveness
+      # (`/api/health`) fails the deploy, readiness (`/api/ready`) is reported as
+      # a dependency warning.
       - name: Smoke test
         env:
           SMOKE_URL: ${{ vars.PUBLIC_URL }}
@@ -362,17 +371,10 @@ jobs:
             echo "::error::Repository variable PUBLIC_URL is not set."
             exit 1
           fi
-          for i in $(seq 1 10); do
-            if curl -fsS --max-time 15 "$SMOKE_URL/api/health" | grep -q '"ok":true'; then
-              echo "✅ Site healthy after ${i} attempt(s)"
-              exit 0
-            fi
-            echo "Attempt $i: not healthy yet, retrying in 15s"
-            sleep 15
-          done
-          echo "::error::Site did not become healthy after 10 attempts"
-          echo "Rollback: cd \$APP_DIR && export TAG=<prev-sha> && docker compose up -d"
-          exit 1
+          if [ ! -x ./scripts/smoke-test.sh ]; then
+            chmod +x ./scripts/smoke-test.sh
+          fi
+          ./scripts/smoke-test.sh
 
       - name: Summary
         if: always()

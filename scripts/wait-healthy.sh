@@ -109,9 +109,9 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
             ;;
         no-healthcheck)
             # Failing here rather than treating it as "still starting" is the
-            # whole point: this container's healthcheck also probes the
-            # database, so a missing check means a broken deployment, not a slow
-            # one.
+            # whole point: this container's healthcheck is what says the
+            # application is alive, so a missing check means a broken
+            # deployment, not a slow one.
             echo "❌ ${container} is running but has no healthcheck — check docker-compose.yml" >&2
             exit 1
             ;;

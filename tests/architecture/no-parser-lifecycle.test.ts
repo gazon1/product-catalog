@@ -169,13 +169,16 @@ describe('nothing in the repository manages the crawler’s lifecycle', () => {
   });
 
   // Проба изнутри контейнера — единственная проверка маршрута до NetBird:
-  // маршрут контейнера и маршрут хоста — разные. Она обязана быть и обязана
-  // валить деплой.
+  // маршрут контейнера и маршрут хоста — разные. Здесь проверяется ровно то,
+  // что проба не управляет краулером: `docker exec` в контейнер витрины и
+  // ключ в заголовке, без старта, остановки и конфигурации чужих сервисов.
+  // Проводку шага и поведение пробы держат `liveness-wiring.test.ts` и
+  // `deploy-probe.test.ts` — этот гейт их не повторяет.
   it('the deploy workflow probes the catalog API from inside the container', () => {
-    const workflow = read('.github/workflows/deploy.yml');
-    expect(workflow).toMatch(/docker exec product-catalog/);
-    expect(workflow).toMatch(/X-Api-Key/);
-    expect(workflow).toMatch(/cannot reach the catalog API[\s\S]*?exit 1/);
+    const probe = read('scripts/probe-catalog-from-container.sh');
+    expect(probe).toMatch(/docker exec/);
+    expect(probe).toMatch(/X-Api-Key/);
+    expect(probe).toMatch(/it refused the request[\s\S]*?exit 1/);
   });
 
   // Ключ не должен попасть в удалённый скрипт как текст: скрипт читается
@@ -187,6 +190,48 @@ describe('nothing in the repository manages the crawler’s lifecycle', () => {
     expect(workflow).toMatch(/base64 -w0/);
     expect(workflow).not.toMatch(/echo "CRAWLER_API_KEY=\$/);
     expect(workflow).toMatch(/CRAWLER_API_KEY='%s'/);
+  });
+
+  // Тот же запрет — для любого секрета, не только для ключа: `secrets.X`,
+  // подставленный прямо в текст удалённого скрипта, — это значение, которое
+  // сервер прочтёт как shell. Путь деплоя теперь едет base64, как и ключ, а не
+  // интерполируется в heredoc.
+  it('the deploy workflow expands no value into a remote script', () => {
+    // `env: SECRET: ${{ secrets.X }}` is fine — GitHub substitutes it before the
+    // shell sees the step. What must not happen is a value interpolated into a
+    // remote heredoc: the server parses that script as shell, so a `$(...)` or a
+    // quote inside a path becomes a command there.
+    //
+    // An unquoted `<<EOF` expands `$VAR` here, on the runner. A quoted `<<'EOF'`
+    // does not — its `$VAR` belongs to the server. Only the first form can carry
+    // a caller's value into the script, so only the first form is inspected.
+    const workflow = read('.github/workflows/deploy.yml').split('\n');
+
+    const offenders: string[] = [];
+    let heredoc: { marker: string; line: number } | null = null;
+
+    for (const [index, line] of workflow.entries()) {
+      if (heredoc === null) {
+        const opened = /<<(?![\'"])[\s]*(\w+)/.exec(line);
+        if (opened) heredoc = { marker: opened[1]!, line: index + 1 };
+        continue;
+      }
+      if (line.trim() === heredoc.marker) {
+        heredoc = null;
+        continue;
+      }
+      // Two forms do not reach the server's parser as a value:
+      //   `\\$VAR` — the server's own variable, escaped from the runner;
+      //   `$b64…` — already inert by construction.
+      //
+      // Single quotes are NOT exempt: inside an unquoted heredoc bash expands
+      // `'$VAR'` too, quotes included in the output.
+      for (const use of line.match(/(?<!\\)\$\{?[A-Za-z_][A-Za-z0-9_]*/g) ?? []) {
+        if (!use.startsWith('$b64')) offenders.push(`line ${index + 1}: ${use}`);
+      }
+    }
+
+    expect(offenders, `expanded into a remote script:\n${offenders.join('\n')}`).toEqual([]);
   });
 
   // У витрины нет базы, поэтому credential'а базы на её диске быть не должно:

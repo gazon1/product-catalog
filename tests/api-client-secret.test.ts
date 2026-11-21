@@ -94,7 +94,7 @@ describe('the key does not reach the visitor and does not reach the log', () => 
     harness.answerWith(
       new Response(JSON.stringify({ error: `key ${API_KEY} is not accepted` }), { status: 401 }),
     );
-    expect(await ping()).toBe(false);
+    expect((await ping()).ok).toBe(false);
 
     expect(logged.length).toBeGreaterThan(0);
     for (const line of logged) {
