@@ -17,7 +17,8 @@
  * попадает в URL: URL оказывается в логах доступа, в логе прокси и в отчёте о
  * падении, а ключ, попавший в любое из этих мест, — это ключ, который придётся
  * ротировать. `redact()` — это пояс для подтяжек: даже ошибка, в тексте которой
- * ключ уже был, не сможет его выпустить.
+ * ключ уже был, не сможет его выпустить. `redactBody()` — то же самое для тела
+ * ответа: оно приходит от краулера и может содержать процитированный ключ.
  */
 
 /**
@@ -33,7 +34,13 @@ export class ApiError extends Error {
   /** HTTP-код, либо `0`, когда ответа не было вовсе. */
   readonly status: number;
 
-  /** Разобранное тело ответа, когда оно было. */
+  /**
+   * Разобранное тело ответа, когда оно было.
+   *
+   * Ключа в нём нет: тело обрезается в конструкторе — приходит оно от
+   * краулера, а краулер вправе процитировать в своём ответе ключ, который
+   * витрина ему послала.
+   */
   readonly body: unknown;
 
   /** Запрошенный путь. Никогда не содержит ключа. */
@@ -70,10 +77,15 @@ export class ApiError extends Error {
       timedOut?: boolean;
     } = {},
   ) {
-    super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
+    // Обрезка ключа — здесь, а не только в местах, которые ошибку бросают:
+    // `body` приходит из ответа краулера, а краулер вправе процитировать в
+    // своём `error` ключ, который витрина ему послала. Сообщение обрезают
+    // вызывающие, а тело — уже нет; разница в один вызов превращается в
+    // ключ в журнале.
+    super(redact(message, apiSecret()), options.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = 'ApiError';
     this.status = options.status ?? 0;
-    this.body = options.body;
+    this.body = redactBody(options.body, apiSecret());
     this.path = options.path ?? '';
     this.requestId = options.requestId ?? null;
     this.timedOut = options.timedOut ?? false;
@@ -96,6 +108,28 @@ export function apiSecret(): string {
 export function redact(message: string, secret: string): string {
   if (!secret) return message;
   return message.split(secret).join('[redacted]');
+}
+
+/**
+ * Убрать ключ из разобранного тела ответа.
+ *
+ * Тело приходит от краулера, а краулер вправе процитировать ключ, который
+ * витрина ему послала, — в своём `error` или в любом другом поле. Обрезаются
+ * все строки внутри тела: форма тела заранее неизвестна, а искать ключ в
+ * известных полях значит оставить его в неизвестном.
+ */
+export function redactBody(body: unknown, secret: string): unknown {
+  if (!secret) return body;
+  if (typeof body === 'string') return redact(body, secret);
+  if (Array.isArray(body)) return body.map((item) => redactBody(item, secret));
+  if (body && typeof body === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(body as Record<string, unknown>)) {
+      out[redact(name, secret)] = redactBody(value, secret);
+    }
+    return out;
+  }
+  return body;
 }
 
 /**

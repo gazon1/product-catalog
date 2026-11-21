@@ -14,6 +14,16 @@ const nextConfig = {
   },
 
   async headers() {
+    // Fast Refresh (React Refresh) evaluates strings, so the dev bundle needs
+    // 'unsafe-eval' — without it the browser refuses the dev runtime and hot
+    // reload breaks with "Evaluating a string as JavaScript violates the
+    // Content Security Policy". The production bundle does not evaluate
+    // strings, so the production policy stays without it.
+    const scriptSrc =
+      process.env.NODE_ENV === 'development'
+        ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+        : "script-src 'self' 'unsafe-inline'";
+
     return [
       {
         source: '/:path*',
@@ -31,7 +41,7 @@ const nextConfig = {
               // data (the crawler's image CDN today, anything tomorrow). They are rendered
               // through a same-origin proxy route, so 'self' is enough here.
               "img-src 'self' data: blob:",
-              "script-src 'self' 'unsafe-inline'",
+              scriptSrc,
               "style-src 'self' 'unsafe-inline'",
               "font-src 'self' data:",
               "connect-src 'self'",

@@ -48,6 +48,9 @@ const TYPES_WORKFLOW = resolve(ROOT, '.github', 'workflows', 'contract-types.yml
 /** Workflow, который двигает пин. */
 const PIN_WORKFLOW = resolve(ROOT, '.github', 'workflows', 'contract-compatibility.yml');
 
+/** Workflow CI: в нём общий список гейтов, включая проверку типов. */
+const CI_WORKFLOW = resolve(ROOT, '.github', 'workflows', 'ci.yml');
+
 /** Временные каталоги, которые этот файл создал. */
 const temporary: string[] = [];
 
@@ -146,6 +149,16 @@ describe('гейт читает контракт, который называе�
     const workflow = readFileSync(TYPES_WORKFLOW, 'utf8');
     expect(workflow).toContain('steps.pin.outputs.commit');
     expect(workflow).not.toContain("vars.CRAWLER_REF || 'main'");
+  });
+
+  it('и CI берёт краулера на коммите пина, а не на main', () => {
+    // Тот же дефект в другом месте: гейт `contract-types-check` входит в общий
+    // список гейтов, а значит, и в CI. Если CI чекаутит `main` краулера, то
+    // гейт сверяет типы с контрактом, которого витрина не знает, — и роняет
+    // pull request ни о чём.
+    const workflow = readFileSync(CI_WORKFLOW, 'utf8');
+    expect(workflow).toContain('ref: ${{ steps.pin.outputs.commit }}');
+    expect(workflow).not.toContain("ref: ${{ vars.CRAWLER_REF || 'main' }}");
   });
 
   it('не выдумывает коммит, когда пин его не называет', () => {

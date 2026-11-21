@@ -40,11 +40,46 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
+      # The pin, read once: the image, the digest it names and the crawler's
+      # commit it was built from. The digest is the cache key — the image is
+      # what the cache holds, and the digest is what says which image that is.
+      #
+      # The commit is what says which contract this storefront talks about: the
+      # types are generated from the crawler's contract document, and that
+      # document has to be the one of the pinned commit — not the one of the
+      # crawler's `main`, which moves on its own and would turn every pull
+      # request of the storefront red. The pin that names no commit names no
+      # contract, and a gate that guesses one checks something else entirely:
+      # it fails here, loudly, and says what is missing.
+      - name: Read the pin
+        id: pin
+        run: |
+          set -euo pipefail
+          image="$(grep -vE '^\s*(#|$)' contract/crawler-image.txt | head -1)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=${image##*@}" >> "$GITHUB_OUTPUT"
+          commit="$(node --input-type=module -e 'import { pinnedCrawlerCommit } from "./scripts/contract-document.mjs"; process.stdout.write(pinnedCrawlerCommit() ?? "");')"
+          if [ -z "$commit" ]; then
+            echo "::error::contract/crawler-image.txt names no crawler commit." >&2
+            echo "::error::The types describe the contract of the image the pin names, and" >&2
+            echo "::error::without that commit the contract cannot be read." >&2
+            exit 1
+          fi
+          echo "the pin names the crawler commit ${commit}"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+
       # The crawler is a separate repository, so a plain checkout of this one
       # cannot build its image: the build context is the crawler's own checkout,
       # and it is fetched here as a sibling checkout, which is the layout the
       # build expects. CRAWLER_REPO_URL is a repository variable — the crawler is
       # public, so no token is needed.
+      #
+      # The checkout is at the commit the pin names — the one whose contract
+      # document the committed types describe. Checking out the crawler's
+      # `main` instead would put a different contract under the gates: the
+      # staleness gate would compare the types with a document this storefront
+      # does not talk to, and the image built from it would not be the pinned
+      # one.
       #
       # The checkout is only needed for a pin that names a LOCAL TAG: such an
       # image is built here, from this checkout. A pin that names a DIGEST is
@@ -56,19 +91,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: ${{ vars.CRAWLER_REPO }}
-          ref: ${{ vars.CRAWLER_REF || 'main' }}
+          ref: ${{ steps.pin.outputs.commit }}
           path: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
-
-      # The pin, read once: the image and the digest it names. The digest is
-      # the cache key — the image is what the cache holds, and the digest is
-      # what says which image that is.
-      - name: Read the pin
-        id: pin
-        run: |
-          set -euo pipefail
-          image="$(grep -vE '^\s*(#|$)' contract/crawler-image.txt | head -1)"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "digest=${image##*@}" >> "$GITHUB_OUTPUT"
 
       # The crawler's image is cached between the runs.
       #
@@ -150,6 +174,10 @@ jobs:
       - name: Run the gates
         env:
           GH_TOKEN: ${{ github.token }}
+          # The gates read the crawler's contract document out of the crawler's
+          # checkout, and the resolver looks for it under this directory — the
+          # same one the checkout above was made into.
+          CRAWLER_DIR: ${{ vars.CRAWLER_DIR || 'wb-parser-kotlin-new' }}
         run: node scripts/run-gates.mjs
 
       # How far the pin is behind the crawler's main.

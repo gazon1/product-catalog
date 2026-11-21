@@ -1,49 +1,24 @@
 # Deploy
 
-This directory contains configuration for deploying the wbshop stack.
+This directory contains configuration for deploying the storefront.
 
-## Ansible Deploy (Full Stack)
+## What is deployed here
 
-The full-stack Ansible playbook lives in the **Caddy-vps** repository:
+The storefront and nothing else. The crawler and its database are operated in
+the crawler repository (`gazon1/wb-parser-kotlin-new`): the storefront is a
+client of the crawler's HTTP API and reaches it over the private NetBird
+network, so it neither starts the crawler nor manages its database.
 
-```
-~/Caddy-vps/playbooks/wbshop.yml
-```
+The storefront is deployed by the **Deploy to VPS** workflow
+(`.github/workflows/deploy.yml`). It publishes the image, writes the catalog's
+address and key into `.env` on the server, recreates the container and checks
+that the container can reach the catalog API — from inside the container, which
+is the only place where the route to the crawler is the one that matters.
 
-This playbook deploys in order:
-1. **adsbrowser** — headless browser (needed by the parser for AdsPower automation)
-2. **wb-parser** — parser container
-3. **Flyway migrations** — runs on shared DB after parser is healthy
-4. **product-catalog (wbshop)** — the storefront
-5. **Caddy route** — publishes `wb-parser.maxdrobin.ru` via the shared reverse proxy
-
-### Usage via just
-
-```bash
-# Deploy current HEAD
-just ansible-deploy
-
-# Deploy a specific tag
-just ansible-deploy abc1234
-
-# Dry run
-just ansible-dry-run
-```
-
-### Requirements
-
-1. **Caddy-vps** at `~/Caddy-vps` (or set `CADDY_VPS_DIR` env var)
-2. **wb-parser** at `../wb-parser-kotlin-new/sailfish` (or set `PARSER_REPO` env var)
-3. Env vars: `WBPARSER_DB_PASSWORD`, `WBPARSER_ADMIN_PASSWORD`, `WBPARSER_ADMIN_API_KEY`
-
-### Direct ansible-playbook
-
-```bash
-cd ~/Caddy-vps
-ansible-playbook playbooks/wbshop.yml \
-  -e "wbshop_tag=<git-sha>" \
-  -e "wbparser_tag=<git-sha>"
-```
+Required repository secrets: `VPS_HOST`, `VPS_USER`, `VPS_PORT`,
+`VPS_APP_DIR`, `VPS_SSH_KEY`, `CRAWLER_API_KEY`.
+Required repository variables: `CRAWLER_API_URL` (the crawler's address in the
+NetBird network), `PUBLIC_URL`.
 
 ## Caddy Route Configuration
 
