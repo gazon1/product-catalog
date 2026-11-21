@@ -151,8 +151,10 @@ describe('nothing in the repository manages the crawler’s lifecycle', () => {
     expect(justfile).not.toMatch(/wbparser|wb-parser/i);
   });
 
+  // `clean.sh` — в списке не просто так: он тоже трогает стенку, и именно
+  // в нём легче всего вернуть уборку чужой инфраструктуры.
   it('the stack scripts do not name the crawler’s containers', () => {
-    for (const file of ['scripts/stack-up.sh', 'scripts/stack-down.sh']) {
+    for (const file of ['scripts/stack-up.sh', 'scripts/stack-down.sh', 'scripts/clean.sh']) {
       const script = read(file);
       expect(script, `${file}: the crawler is not ours to stop`).not.toMatch(
         /product-catalog-dev-(parser|db)/,
