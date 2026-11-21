@@ -169,4 +169,12 @@ describe('nothing in the repository manages the crawler’s lifecycle', () => {
     expect(workflow).not.toMatch(/echo "CRAWLER_API_KEY=\$/);
     expect(workflow).toMatch(/CRAWLER_API_KEY='%s'/);
   });
+
+  // У витрины нет базы, поэтому credential'а базы на её диске быть не должно:
+  // деплой вычищает его из .env вместе с остальным.
+  it('the deploy workflow leaves no database credential on the server', () => {
+    const workflow = read('.github/workflows/deploy.yml');
+    expect(workflow).toMatch(/DATABASE_URL/);
+    expect(workflow).toMatch(/POSTGRES_/);
+  });
 });
