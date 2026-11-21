@@ -129,7 +129,11 @@ export function retryAfterMs(header: string | null, now = Date.now()): number | 
 
   if (DELAY_SECONDS.test(text)) {
     const seconds = Number(text);
-    return Number.isFinite(seconds) ? Math.floor(seconds * 1000) : null;
+    // Число длиннее, чем вмещает double, — это `Infinity`, а не мусор: сервер
+    // попросил ждать заведомо дольше любого бюджета, и это «не повторять», а не
+    // «заголовка нет». `null` здесь означал бы повтор через ожидание по умолчанию.
+    if (!Number.isFinite(seconds)) return Infinity;
+    return Math.floor(seconds * 1000);
   }
 
   // Буква в значении — это HTTP-date: у всех трёх форм, которые определяет

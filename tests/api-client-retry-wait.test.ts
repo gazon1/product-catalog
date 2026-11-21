@@ -169,6 +169,25 @@ describe('the retry waits before it asks again', () => {
     expect(harness.waits[0]).toBe(RETRY_AFTER_MAX_MS);
   });
 
+  it('never waits past the budget, however far the answer reaches', async () => {
+    // Момент чуть ниже бюджета — самое узкое место добавки: она не должна
+    // вынести ожидание за бюджет, но и не должна срезать названное ожидание.
+    stubAttempts(
+      () =>
+        new Response(JSON.stringify({ error: 'not ready' }), {
+          status: 503,
+          headers: { 'Retry-After': String(RETRY_AFTER_MAX_MS / 1000 - 1) },
+        }),
+      ready,
+    );
+    vi.spyOn(Math, 'random').mockReturnValue(0.999);
+
+    await apiGet('/items');
+
+    expect(harness.waits[0]).toBeGreaterThanOrEqual(RETRY_AFTER_MAX_MS - 1_000);
+    expect(harness.waits[0]).toBeLessThanOrEqual(RETRY_AFTER_MAX_MS);
+  });
+
   it('waits a little when the answer names no moment', async () => {
     // 503 без `Retry-After` всё равно значит «не сейчас»: спросить снова в ту же
     // миллисекунду — значит спросить снова, пока краулер всё ещё говорит «нет».
@@ -283,5 +302,28 @@ describe('the answer’s moment is read in both forms HTTP allows', () => {
     // вернуть то, что сказал сервер, чтобы укорачивание было видно и запрещено.
     expect(retryAfterMs(String(RETRY_AFTER_MAX_MS / 1000 + 1), now)).toBe(RETRY_AFTER_MAX_MS + 1_000);
     expect(retryAfterMs('86400', now)).toBe(86_400_000);
+  });
+
+  it('reads a delay too large for a double as “forever”, not as malformed', () => {
+    // Заведомо дольше любого бюджета — это «не повторять». `null` здесь означал
+    // бы «заголовка нет» и повтор через ожидание по умолчанию — раньше срока.
+    expect(retryAfterMs('1' + '0'.repeat(400), now)).toBe(Infinity);
+  });
+});
+
+describe('a delay that cannot be represented still cannot be shortened', () => {
+  it('does not retry early when the answer asks for more than a double holds', async () => {
+    const attempts = stubAttempts(
+      () =>
+        new Response(JSON.stringify({ error: 'not ready' }), {
+          status: 503,
+          headers: { 'Retry-After': '1' + '0'.repeat(400) },
+        }),
+      ready,
+    );
+
+    await expect(apiGet('/items')).rejects.toMatchObject({ status: 503 });
+    expect(attempts()).toBe(1);
+    expect(harness.waits).toEqual([]);
   });
 });
