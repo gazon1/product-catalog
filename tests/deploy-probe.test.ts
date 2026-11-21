@@ -117,11 +117,13 @@ async function run(url: string): Promise<{ status: number; output: string }> {
 }
 
 describe('the container-side catalog probe', () => {
-  it('fails the deploy when the crawler refuses the request', async () => {
-    const url = await serveStatus(401);
-    const { status, output } = await run(url);
+  // A refusal is this deploy's own misconfiguration, whatever the status: a
+  // wrong key (401/403) and a wrong address (404) are the same operator action.
+  it.each([401, 403, 404])('fails the deploy when the crawler answers %i', async (status) => {
+    const url = await serveStatus(status);
+    const { status: exitCode, output } = await run(url);
 
-    expect(status).not.toBe(0);
+    expect(exitCode).not.toBe(0);
     expect(output).toContain('it refused the request');
   });
 
