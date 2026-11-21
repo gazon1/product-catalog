@@ -88,8 +88,13 @@ async function run(
     resolve(dir, 'docker'),
     [
       '#!/usr/bin/env bash',
-      '# docker exec <container> node -e <code>  ->  node -e <code>',
-      'shift 3            # exec, the container name, node',
+      '# docker exec [-e VAR=VAL]... <container> node -e <code>  ->  node -e <code>',
+      'shift 1            # exec',
+      'while [ "${1:-}" = "-e" ]; do',
+      '  export "$2"      # the probe passes its deadline this way',
+      '  shift 2',
+      'done',
+      'shift 2            # the container name, node',
       'exec node "$@"',
       '',
     ].join('\n'),
@@ -183,4 +188,30 @@ describe('the container-side catalog probe', () => {
       expect(output).not.toContain('::warning::');
     },
   );
+
+  // A leading zero is the same number written differently: bash reads it as
+  // octal, and JavaScript reads `010` as 8 and `0008` as a syntax error. The
+  // value now travels through the environment and `Number()`, so both are the
+  // decimals they look like.
+  it('reads a small leading-zero deadline as a deadline, not a syntax error', async () => {
+    // The blackhole never answers, so a deadline this short is guaranteed to
+    // fire: what is under test is that the script ran at all.
+    const url = await serveBlackhole();
+    const { status, output } = await run(url, {
+      CRAWLER_PROBE_TIMEOUT_MS: '0008',
+    });
+
+    expect(status).toBe(0);
+    expect(output).toContain('::warning::');
+    expect(output).not.toMatch(/SyntaxError|Unexpected number|Unexpected identifier/);
+  });
+
+  it('accepts a generous leading-zero deadline on a healthy catalog', async () => {
+    const url = await serveStatus(200);
+    const { status, output } = await run(url, { CRAWLER_PROBE_TIMEOUT_MS: '00005000' });
+
+    expect(status).toBe(0);
+    expect(output).not.toContain('::warning::');
+    expect(output).not.toContain('must be');
+  });
 });

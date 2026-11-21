@@ -43,19 +43,24 @@ esac
 # signed 32-bit timer maximum (2147483647) to a 1 ms timeout with only a warning
 # — both are this deploy's misconfiguration, and both would otherwise be
 # reported as an outage of somebody else's service.
-if [ "$probe_timeout_ms" -lt 1 ] || [ "$probe_timeout_ms" -gt 2147483647 ]; then
+#
+# `10#` makes bash read the value as decimal: a leading zero would otherwise be
+# octal to bash. The value travels to node through the environment and is read
+# with Number() there — interpolating the string into the script would make
+# `0008` a syntax error and `010` the octal 8.
+if [ "$((10#$probe_timeout_ms))" -lt 1 ] || [ "$((10#$probe_timeout_ms))" -gt 2147483647 ]; then
     echo "CRAWLER_PROBE_TIMEOUT_MS must be between 1 and 2147483647 ms, got '$probe_timeout_ms'" >&2
     exit 1
 fi
 
 set +e
-docker exec "$container" node -e "
+docker exec -e CRAWLER_PROBE_TIMEOUT_MS="$probe_timeout_ms" "$container" node -e "
   const raw = process.env.CRAWLER_API_URL || '';
   const base = raw.endsWith('/') ? raw.slice(0, -1) : raw;
   const url = base.endsWith('/api/catalog/v1') ? base : base + '/api/catalog/v1';
   fetch(url + '/ready', {
     headers: { 'X-Api-Key': process.env.CRAWLER_API_KEY || '' },
-    signal: AbortSignal.timeout($probe_timeout_ms),
+    signal: AbortSignal.timeout(Number(process.env.CRAWLER_PROBE_TIMEOUT_MS)),
   })
     .then((r) => {
       console.log('the catalog API answered', r.status);
