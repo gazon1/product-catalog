@@ -169,4 +169,18 @@ describe('the container-side catalog probe', () => {
     // Bounded by the probe's own deadline, not by the test's patience.
     expect(elapsed).toBeLessThan(15_000);
   });
+
+  // A deadline this deploy cannot mean is this deploy's problem, not the
+  // crawler's: it must not be reported as somebody else's outage.
+  it.each(['0', 'abc', '4294967296'])(
+    'refuses a meaningless deadline (%s) instead of warning about an outage',
+    async (value) => {
+      const url = await serveStatus(200);
+      const { status, output } = await run(url, { CRAWLER_PROBE_TIMEOUT_MS: value });
+
+      expect(status).not.toBe(0);
+      expect(output).toContain('CRAWLER_PROBE_TIMEOUT_MS');
+      expect(output).not.toContain('::warning::');
+    },
+  );
 });
