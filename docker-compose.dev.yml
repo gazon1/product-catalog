@@ -12,6 +12,12 @@
 # environment: CRAWLER_API_URL names it, CRAWLER_API_KEY opens it. Compose reads
 # both from the `.env` file in this directory (or from the shell), which is
 # where the same two values live for production.
+#
+# The address in `.env` is the one for the host-side recipes (`just dev`,
+# `just stack-up`), where the crawler is `localhost`. Inside a container
+# `localhost` is the container itself, so this file reads a different variable:
+# the crawler usually runs on the developer's own machine, outside Docker, and
+# `host.docker.internal` is how a container names the host it runs on.
 
 services:
   web:
@@ -23,7 +29,7 @@ services:
       PORT: "3000"
       # The crawler's catalog API. The storefront never sees a database
       # connection string, and it cannot write — it holds a key and reads.
-      CRAWLER_API_URL: ${CRAWLER_API_URL:-http://host.docker.internal:8080}
+      CRAWLER_API_URL: ${CRAWLER_API_URL_IN_CONTAINER:-http://host.docker.internal:8080}
       CRAWLER_API_KEY: ${CRAWLER_API_KEY:-}
       NEXT_PUBLIC_SITE_URL: http://localhost:3000
       NEXT_TELEMETRY_DISABLED: "1"

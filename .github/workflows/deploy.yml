@@ -214,10 +214,11 @@ jobs:
           # are the exception: the storefront does not connect to a database
           # any more, so a credential of the crawler's database has no reason
           # to stay on its disk. That covers every spelling of one —
-          # DATABASE_*, POSTGRES_* and libpq's own PG*.
+          # DATABASE_*, POSTGRES_* and libpq's own PG* — with or without the
+          # `export` prefix compose accepts in a .env file.
           umask 077
           if [ -f .env ]; then
-            grep -vE '^(CRAWLER_API_URL|CRAWLER_API_KEY|NEXT_PUBLIC_SITE_URL|DATABASE_URL|DATABASE_[A-Z_]*|POSTGRES_[A-Z_]*|PG[A-Z_]*)=' .env > .env.new || true
+            grep -vE '^(export[[:space:]]+)?(CRAWLER_API_URL|CRAWLER_API_KEY|NEXT_PUBLIC_SITE_URL|DATABASE_URL|DATABASE_[A-Z_]*|POSTGRES_[A-Z_]*|PG[A-Z_]*)=' .env > .env.new || true
           else
             : > .env.new
           fi

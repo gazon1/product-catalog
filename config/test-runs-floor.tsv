@@ -42,6 +42,7 @@ tests/freshness.test.ts	14
 tests/image-pin.test.ts	11
 tests/money.test.ts	12
 tests/params.test.ts	11
+tests/scripts-read-env.test.ts	6
 tests/server-rendering.test.ts	3
 tests/slug.test.ts	14
 tests/test-runs-floor.test.ts	2

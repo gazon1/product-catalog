@@ -28,8 +28,7 @@ const ROOT = resolve(__dirname, '..', '..');
 const read = (path: string): string => readFileSync(resolve(ROOT, path), 'utf8');
 
 /**
- * Compose-файлы репозитория и единственный сервис, который в каждом из них
- * есть: витрина и только она.
+ * Compose-файлы репозитория и сервис, который витрина в них разворачивает.
  */
 const COMPOSE_FILES: Record<string, string> = {
   'docker-compose.yml': 'product-catalog',
@@ -73,22 +72,39 @@ const envKeys = (environment: unknown): string[] => {
   return [];
 };
 
-describe('the compose files manage no crawler and no database', () => {
-  it.each(Object.entries(COMPOSE_FILES))(
-    '%s declares only the storefront service',
-    (file, storefront) => {
-      const compose = composeOf(file);
-      expect(Object.keys(compose.services ?? {}).sort()).toEqual([storefront]);
-    },
-  );
+/** Имена сервисов, от которых зависит сервис, — в любом виде записи. */
+const dependsOn = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.map((entry) => String(entry));
+  if (value && typeof value === 'object') return Object.keys(value as Record<string, unknown>);
+  return [];
+};
 
-  it.each(Object.keys(COMPOSE_FILES))('%s has no depends_on', (file) => {
+describe('the compose files manage no crawler and no database', () => {
+  // В продакшене разворачивается витрина и только она: issue требует, чтобы
+  // деплой не трогал ничего, кроме витрины.
+  it('docker-compose.yml deploys the storefront and nothing else', () => {
+    const compose = composeOf('docker-compose.yml');
+    expect(Object.keys(compose.services ?? {}).sort()).toEqual(['product-catalog']);
+  });
+
+  // В dev-файле витрина может стоять рядом с сервисом, который нужен ей
+  // самой: issue прямо велит такие зависимости не выбрасывать. Запрещено
+  // одно — рядом с витриной не должно быть краулера и его базы, и витрина
+  // не должна на них зависеть.
+  it('docker-compose.dev.yml runs the storefront', () => {
+    const compose = composeOf('docker-compose.dev.yml');
+    expect(Object.keys(compose.services ?? {})).toContain('web');
+  });
+
+  it.each(Object.keys(COMPOSE_FILES))('%s does not depend on the crawler', (file) => {
     const compose = composeOf(file);
     for (const [name, service] of Object.entries(compose.services ?? {})) {
-      expect(
-        service.depends_on,
-        `${file}: the service '${name}' depends on something`,
-      ).toBeUndefined();
+      for (const dependency of dependsOn(service.depends_on)) {
+        expect(
+          dependency,
+          `${file}: the service '${name}' depends on '${dependency}'`,
+        ).not.toMatch(FOREIGN);
+      }
     }
   });
 
@@ -100,6 +116,7 @@ describe('the compose files manage no crawler and no database', () => {
       const compose = composeOf(file);
       for (const [name, service] of Object.entries(compose.services ?? {})) {
         const where = `${file}: the service '${name}'`;
+        expect(name, `${where} is named after the crawler`).not.toMatch(FOREIGN);
         expect(String(service.image ?? ''), `${where} runs a crawler image`).not.toMatch(FOREIGN);
         expect(JSON.stringify(service.build ?? ''), `${where} builds a crawler image`).not.toMatch(
           FOREIGN,
