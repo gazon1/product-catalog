@@ -121,6 +121,17 @@ ok "catalog API ready at $CRAWLER_API_URL"
 step "Storefront"
 if running_pid "$STACK_DIR/site.pid" "$SITE_MATCH" >/dev/null; then
     ok "already running (pid $(cat "$STACK_DIR/site.pid"))"
+    # Запущенная витрина получила адрес и ключ в момент старта. Сменился ключ
+    # или адрес — а процесс тот же: витрина продолжает ходить по старому ключу
+    # и получает `401`, а preflight был зелёным, потому что проверял новые
+    # значения. Молчание здесь выглядело бы как «всё поднялось».
+    if [ -f "$STACK_DIR/site.fingerprint" ]; then
+        current="$(printf '%s\n%s' "$CRAWLER_API_URL" "$CRAWLER_API_KEY" | sha256sum | cut -d' ' -f1)"
+        if [ "$current" != "$(cat "$STACK_DIR/site.fingerprint")" ]; then
+            warn "the running storefront was started with another address or key."
+            warn "   Restart it: just stack-down && just stack-up"
+        fi
+    fi
 else
     launch "$STACK_DIR/site.pid" "$LOG_DIR/site.log" \
         env \
@@ -130,6 +141,10 @@ else
         NEXT_TELEMETRY_DISABLED=1 \
         PORT="$SITE_PORT" \
         npm run dev
+
+    # Отпечаток запуска: по нему `stack-up` узнает, что ключ или адрес сменились.
+    printf '%s\n%s' "$CRAWLER_API_URL" "$CRAWLER_API_KEY" \
+        | sha256sum | cut -d' ' -f1 > "$STACK_DIR/site.fingerprint"
 
     waited=0
     while [ "$waited" -lt 120 ]; do

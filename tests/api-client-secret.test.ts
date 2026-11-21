@@ -59,6 +59,22 @@ describe('the key does not stay in the text of a failure', () => {
     expect(error.message).not.toContain(API_KEY);
     expect(error.message).toContain('[redacted]');
   });
+
+  // Тело ответа — тоже носитель ключа: краулер вправе процитировать его в
+  // своём `error`. `ApiError.body` — публичное поле, и тот, кто ошибку
+  // записывает в журнал целиком, унёс бы ключ с собой.
+  it('does not let the key out of the body of the failure', async () => {
+    const error = await errorCarryingTheKey();
+    expect(JSON.stringify(error.body)).not.toContain(API_KEY);
+    expect(JSON.stringify(error.body)).toContain('[redacted]');
+  });
+
+  it('keeps the key out of a body built by hand', () => {
+    const error = new ApiError('the catalog said no', {
+      body: { error: `key ${API_KEY} is not accepted`, nested: [`${API_KEY}`] },
+    });
+    expect(JSON.stringify(error.body)).not.toContain(API_KEY);
+  });
 });
 
 describe('the key does not reach the visitor and does not reach the log', () => {
