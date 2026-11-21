@@ -178,7 +178,9 @@ export async function getSiteStats(): Promise<SiteStats> {
  * текст остаётся в журнале.
  */
 function readinessReason(err: unknown): string {
-  if (!(err instanceof ApiError)) return 'unknown';
+  // `error` — и запасной класс тоже: словарь наружу закрытый, и значение вне
+  // него документация не обещает.
+  if (!(err instanceof ApiError)) return 'error';
   if (err.status === 401 || err.status === 403) return 'unauthorized';
   if (err.status === 0) return err.timedOut ? 'timeout' : 'unreachable';
   if (err.status === 503) return 'not-ready';

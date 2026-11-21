@@ -169,13 +169,19 @@ describe('nothing in the repository manages the crawler’s lifecycle', () => {
   });
 
   // Проба изнутри контейнера — единственная проверка маршрута до NetBird:
-  // маршрут контейнера и маршрут хоста — разные. Она обязана быть и обязана
-  // валить деплой.
+  // маршрут контейнера и маршрут хоста — разные. Она обязана быть, обязана
+  // спрашивать с ключом и обязана падать, когда каталог отказал в запросе.
+  // Сама проба живёт скриптом (`scripts/probe-catalog-from-container.sh`),
+  // чтобы её поведение исполнялось `tests/deploy-probe.test.ts`, а не
+  // сверялось по тексту workflow.
   it('the deploy workflow probes the catalog API from inside the container', () => {
     const workflow = read('.github/workflows/deploy.yml');
-    expect(workflow).toMatch(/docker exec product-catalog/);
-    expect(workflow).toMatch(/X-Api-Key/);
-    expect(workflow).toMatch(/cannot reach the catalog API[\s\S]*?exit 1/);
+    expect(workflow).toMatch(/scripts\/probe-catalog-from-container\.sh/);
+
+    const probe = read('scripts/probe-catalog-from-container.sh');
+    expect(probe).toMatch(/docker exec/);
+    expect(probe).toMatch(/X-Api-Key/);
+    expect(probe).toMatch(/it refused the request[\s\S]*?exit 1/);
   });
 
   // Ключ не должен попасть в удалённый скрипт как текст: скрипт читается

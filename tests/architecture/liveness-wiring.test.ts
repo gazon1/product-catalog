@@ -55,4 +55,20 @@ describe('liveness and dependency readiness stay apart', () => {
     // so the assertions here cover wiring, and the behaviour is proven elsewhere.
     expect(step!.run).toContain('./scripts/smoke-test.sh');
   });
+
+  // The container-side probe is the other half of the same policy: a refused
+  // request is a misconfiguration this deploy wrote and must fail, while the
+  // crawler not answering is somebody else's downtime and must not. The policy
+  // lives in a script so that `tests/deploy-probe.test.ts` executes it; this
+  // gate only keeps the workflow step pointed at that script.
+  it('the container probe step runs the script that implements the policy', () => {
+    const workflow = parse(read('.github/workflows/deploy.yml')) as {
+      jobs: { deploy: { steps: { name?: string; run?: string }[] } };
+    };
+    const step = workflow.jobs.deploy.steps.find(
+      (s) => s.name === 'The storefront reaches the catalog API from inside the container',
+    );
+    expect(step, 'the deploy workflow has no container-side catalog probe').toBeDefined();
+    expect(step!.run).toContain('./scripts/probe-catalog-from-container.sh');
+  });
 });

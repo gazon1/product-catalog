@@ -306,9 +306,9 @@ jobs:
       # reach the crawler serves error pages while the host curls it fine.
       #
       # So the probe runs inside the container, with the container's own
-      # environment — the address and the key it was given. The key is never
-      # passed on the command line and never printed: it is read from the
-      # environment inside the container and used as a header.
+      # environment — the address and the key it was given. The policy (a refusal
+      # fails the deploy, an outage only warns) lives in the script, so that
+      # `tests/deploy-probe.test.ts` executes it instead of matching this file.
       - name: The storefront reaches the catalog API from inside the container
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -317,22 +317,12 @@ jobs:
         run: |
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<'EOF'
           set -euo pipefail
+          cd "${{ secrets.VPS_APP_DIR }}"
 
-          # The same address the client builds: the prefix is added when the
-          # address does not already carry it.
-          docker exec product-catalog node -e "
-            const raw = process.env.CRAWLER_API_URL || '';
-            const base = raw.endsWith('/') ? raw.slice(0, -1) : raw;
-            const url = base.endsWith('/api/catalog/v1') ? base : base + '/api/catalog/v1';
-            fetch(url + '/ready', { headers: { 'X-Api-Key': process.env.CRAWLER_API_KEY || '' } })
-              .then((r) => { console.log('the catalog API answered', r.status); process.exit(r.ok ? 0 : 1); })
-              .catch((e) => { console.error('the catalog API is unreachable from the container:', e.message); process.exit(1); });
-          " || {
-            echo "::error::The storefront container cannot reach the catalog API."
-            echo "::error::This is a dependency failure, not a storefront process failure: /api/health (liveness) answers, /api/ready (dependency) would not."
-            echo "::error::Check that CRAWLER_API_URL is the crawler's address in the NetBird network and that the container can route to it."
-            exit 1
-          }
+          if [ ! -x ./scripts/probe-catalog-from-container.sh ]; then
+            chmod +x ./scripts/probe-catalog-from-container.sh
+          fi
+          ./scripts/probe-catalog-from-container.sh product-catalog
 
           # The key is a server-side secret: it must not be in the bundle that
           # the browser downloads. The container is the place where the bundle
