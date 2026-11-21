@@ -1,36 +1,26 @@
 #!/usr/bin/env bash
 #
-# Stop everything `just stack-up` started: crawler, storefront, dev database.
+# Stop what `just stack-up` started: the storefront.
 #
 #   just stack-down
-#   just stack-down --purge     # also drop the database volume (destructive)
 #
-# ORDER MATTERS
+# WHAT IT STOPS
 #
-# Crawler, then storefront, then database. The crawler holds pooled JDBC
-# connections to the dev database; killing the database out from under it leaves
-# a process that logs connection errors for as long as it lives. The storefront
-# opens a new connection per query through a pool, so it would merely fail its
-# next render — but there is no reason to let either happen.
+# The storefront, and nothing else. The crawler and its database are not ours:
+# they are started, stopped and migrated in the crawler repository, and this
+# script does not know their names.
 #
 # PROCESS GROUPS, NOT PIDS
 #
-# `npm run dev` forks a `next-server` that outlives its parent, so signalling the
-# recorded npm PID leaves the process holding :3000 alive and the next
-# `stack-up` fails on "address already in use". Both services are started under
-# `setsid` (see stack-up.sh), which gives each its own process group whose PGID
+# `npm run dev` forks a `next-server` that outlives its parent, so signalling
+# the recorded npm PID leaves the process holding :3000 alive and the next
+# `stack-up` fails on "address already in use". The storefront is started under
+# `setsid` (see stack-up.sh), which gives it its own process group whose PGID
 # equals the recorded PID — so the whole group can be signalled at once.
 #
 # A recorded PID is verified against /proc/<pid>/cmdline before it is signalled.
 # PIDs get reused, and `kill` on a recycled PID belonging to something else is
 # the kind of mistake that is only noticed much later.
-#
-# WITHOUT --purge
-#
-# The Postgres volume is left alone. It holds the synthetic seed and, after a
-# real crawl, hundreds of scraped rows; a stack that forgets its own state
-# between sessions is an annoyance, a stack that forgets its data is a lost
-# afternoon. `--purge` is the explicit, separate ask.
 
 set -euo pipefail
 
@@ -38,33 +28,18 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STACK_DIR="$ROOT/.stack"
 LOG_DIR="$STACK_DIR/logs"
 
-# Every Docker call is bounded: a daemon that does not answer has to say so
-# instead of hanging the script.
-. "$ROOT/scripts/docker-timeout.sh"
-
-PURGE=0
-for arg in "$@"; do
-    case "$arg" in
-        --purge) PURGE=1 ;;
-        *) printf 'unknown option: %s\n' "$arg" >&2; exit 2 ;;
-    esac
-done
-
 step() { printf '\n\033[1;34m▸ %s\033[0m\n' "$1"; }
 ok()   { printf '\033[0;32m  ✅ %s\033[0m\n' "$1"; }
 warn() { printf '\033[0;33m  ⚠️  %s\033[0m\n' "$1"; }
 die()  { printf '\033[0;31m  ❌ %s\033[0m\n' "$1" >&2; exit 1; }
 
-# What identifies each service in /proc/<pid>/cmdline.
+# What identifies the storefront in /proc/<pid>/cmdline.
 #
 # The storefront is `npm run dev`, NOT `next` — npm is the process that gets the
-# pidfile and its command line never contains the word "next". Matching on "next"
-# made a healthy storefront look like a recycled PID, so the group kill was
-# skipped and only the port-holder fallback stopped it. `next-server` is the
+# pidfile and its command line never contains the word "next". Matching on
+# "next" made a healthy storefront look like a recycled PID, so the group kill
+# was skipped and only the port-holder fallback stopped it. `next-server` is the
 # child that actually binds :3000; clear_port deals with that one.
-#
-# The crawler has no entry here: it is a container, and a container is stopped
-# by its runtime rather than by a signal.
 SITE_MATCH="run dev"
 
 # Signal a process group, escalating to SIGKILL only if SIGTERM is ignored.
@@ -114,32 +89,6 @@ stop_group() {
     ok "$label stopped (pid $pid)"
 }
 
-# ---- crawler ----------------------------------------------------------------
-
-step "Crawler"
-# The crawler is a container now, not a process on the host: it is the crawler's
-# own image, the same artifact that is deployed. `docker compose stop` is how
-# it stops; there is no pidfile to signal and no process group to worry about.
-#
-# A crawler left running holds pooled connections to the dev database, so it is
-# stopped before the database.
-#
-# The names of the running containers are read once, and a Docker daemon that
-# does not answer is an error — not a list of nothing. "Nothing is running" and
-# "we could not ask" are different states, and only one of them means the
-# stack is down.
-if ! running_containers="$(docker_bounded ps --format '{{.Names}}')"; then
-    die "the Docker daemon does not answer — the stack was not stopped"
-fi
-
-if printf '%s\n' "$running_containers" | grep -qx "product-catalog-dev-parser"; then
-    (cd "$ROOT" && docker_bounded compose -f docker-compose.dev.yml stop wb-parser >/dev/null) \
-        || die "the crawler container was not stopped"
-    ok "crawler stopped"
-else
-    warn "crawler not running"
-fi
-
 # ---- storefront -------------------------------------------------------------
 
 step "Storefront"
@@ -172,26 +121,9 @@ clear_port() {
 
 clear_port "${STACK_SITE_PORT:-3000}" "$SITE_MATCH\|next-server" "the storefront"
 
-# ---- database ---------------------------------------------------------------
-
-step "Database"
-if printf '%s\n' "$running_containers" | grep -qx "product-catalog-dev-db"; then
-    if [ "$PURGE" = "1" ]; then
-        (cd "$ROOT" && docker_bounded compose -f docker-compose.dev.yml down -v >/dev/null) \
-            || die "the dev database and its volume were not removed"
-        ok "dev database and its volume removed (--purge)"
-    else
-        (cd "$ROOT" && docker_bounded compose -f docker-compose.dev.yml down >/dev/null) \
-            || die "the dev database was not stopped"
-        ok "dev database stopped (volume kept — use --purge to drop it)"
-    fi
-else
-    warn "dev database not running"
-fi
-
 # ---- report -----------------------------------------------------------------
 
 step "Done"
 echo "  logs kept for inspection: $LOG_DIR"
 echo ""
-echo "  Bring it all back with: just stack-up"
+echo "  Bring it back with: just stack-up"

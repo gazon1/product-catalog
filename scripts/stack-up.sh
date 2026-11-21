@@ -1,31 +1,26 @@
 #!/usr/bin/env bash
 #
-# Bring up the whole local stack: the crawler's database, the crawler, and the
-# storefront.
+# Bring up the storefront on the host.
 #
 #   just stack-up
 #
-# WHAT THE STACK IS
+# WHAT THIS BRINGS UP
 #
-# Three things, and only three:
+# One thing: the storefront, on the host, so that `next dev` can hot-reload.
 #
-#   * a PostgreSQL, with no published port — it is reachable from the compose
-#     network and from nowhere else;
-#   * the crawler, which creates the schema (its own Flyway migrations) and
-#     fills it with synthetic data (its own demo seed);
-#   * the storefront, which reads the catalog over HTTP.
+# The crawler is not here. It is a separate service, operated in the crawler
+# repository (wb-parser-kotlin-new): it owns its image, its PostgreSQL and its
+# schema, and this repository only reads its HTTP API. Nothing here starts,
+# stops, migrates or configures it — the storefront is a client and only a
+# client.
 #
-# The storefront has no database credentials. It has a key and a URL. There is
-# no copy of the schema in this repository, so there is nothing here that can
-# drift from the schema the crawler actually has.
+# THE CRAWLER HAS TO BE ALREADY THERE
 #
-# THE CRAWLER IS A CONTAINER, NOT A JAR
-#
-# The crawler used to be started from a jar built by the checkout next door,
-# which meant the stack needed a crawler checkout, a gradle build, and a
-# half-minute of waiting before anything else could start. It is now the
-# crawler's own image — the same artifact that is deployed — so the local stack
-# runs the same bytes production runs.
+# The address and the key come from the environment or from the `.env` file in
+# the repository root — the same two values production uses. Before the site is
+# started the catalog API is asked whether it is ready: a storefront that comes
+# up against an unreachable catalog only serves error pages, and saying so
+# before it starts is cheaper than finding it out in the browser.
 #
 # THE STOREFRONT RUNS ON THE HOST
 #
@@ -36,13 +31,8 @@
 # "address already in use". `stack-down.sh` signals the process group.
 #
 # Env overrides (all optional):
-#   STACK_PARSER_IMAGE    crawler image              (default wb-parser:local)
-#   STACK_CRAWLER_API_KEY catalog key                (default local-dev-catalog-key)
-#   STACK_ADMIN_API_KEY   admin API key              (default local-dev-admin-key)
 #   STACK_SITE_PORT       storefront port            (default 3000)
-#   STACK_PARSER_PORT     crawler port               (default 8080)
-#   STACK_SKIP_SITE=1     bring up the database and crawler only
-#   STACK_DEMO_SEED=0     start the crawler without the demo seed
+#   STACK_CATALOG_TIMEOUT seconds to wait for the API (default 60)
 
 set -euo pipefail
 
@@ -50,21 +40,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STACK_DIR="$ROOT/.stack"
 LOG_DIR="$STACK_DIR/logs"
 
-# Every Docker call is bounded: a daemon that does not answer has to say so
-# instead of hanging the script.
-. "$ROOT/scripts/docker-timeout.sh"
-
 SITE_PORT="${STACK_SITE_PORT:-3000}"
-PARSER_PORT="${STACK_PARSER_PORT:-8080}"
-CATALOG_API_KEY="${STACK_CRAWLER_API_KEY:-local-dev-catalog-key}"
-ADMIN_API_KEY="${STACK_ADMIN_API_KEY:-local-dev-admin-key}"
-PARSER_IMAGE="${STACK_PARSER_IMAGE:-wb-parser:local}"
-
-export STACK_CATALOG_API_KEY="$CATALOG_API_KEY"
-export STACK_ADMIN_API_KEY="$ADMIN_API_KEY"
-
-DB_CONTAINER="product-catalog-dev-db"
-PARSER_CONTAINER="product-catalog-dev-parser"
+CATALOG_TIMEOUT="${STACK_CATALOG_TIMEOUT:-60}"
 
 mkdir -p "$LOG_DIR"
 
@@ -72,6 +49,18 @@ step() { printf '\n\033[1;34m▸ %s\033[0m\n' "$1"; }
 ok()   { printf '\033[0;32m  ✅ %s\033[0m\n' "$1"; }
 warn() { printf '\033[0;33m  ⚠️  %s\033[0m\n' "$1"; }
 die()  { printf '\033[0;31m  ❌ %s\033[0m\n' "$1" >&2; exit 1; }
+
+# The catalog's address and key: the environment first, the `.env` file
+# second. The file is where they live in production too — one place, two
+# environments.
+read_env() {
+    local name="$1"
+    local value="${!name:-}"
+    if [ -z "$value" ] && [ -f "$ROOT/.env" ]; then
+        value="$(grep -E "^${name}=" "$ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+    fi
+    printf '%s' "$value"
+}
 
 # What identifies the storefront in /proc/<pid>/cmdline. `npm run dev` never
 # says "next" — see stack-down.sh for what went wrong when it did.
@@ -114,75 +103,58 @@ launch() {
 
 step "Preflight"
 
-# The daemon is asked first and separately: a machine whose daemon does not
-# answer is a different problem from a machine that has no such image, and the
-# two must not be reported with the same words.
-docker_daemon_alive || die "the Docker daemon does not answer. Restart it: systemctl restart docker"
+CRAWLER_API_URL="$(read_env CRAWLER_API_URL)"
+CRAWLER_API_KEY="$(read_env CRAWLER_API_KEY)"
 
-if ! run_bounded "$DOCKER_CALL_TIMEOUT" docker image inspect "$PARSER_IMAGE" >/dev/null 2>&1; then
-    die "the crawler image '$PARSER_IMAGE' is not available locally.
-       Build it in the crawler repository:  just app::docker-build
-       Or point this stack at another one:  STACK_PARSER_IMAGE=<image> just stack-up"
-fi
-ok "crawler image $PARSER_IMAGE"
+[ -n "$CRAWLER_API_URL" ] || die "CRAWLER_API_URL is not set.
+       It is the crawler's base URL — the address of the API this storefront
+       reads. Put it in .env (see .env.example) or in the environment."
+[ -n "$CRAWLER_API_KEY" ] || die "CRAWLER_API_KEY is not set.
+       It is the crawler's CATALOG_API_KEY, sent as X-Api-Key. Put it in .env
+       (see .env.example) or in the environment."
 
-# ── database and crawler ─────────────────────────────────────────────────────
+export CRAWLER_API_URL CRAWLER_API_KEY
 
-step "Database and crawler"
-
-docker_bounded compose -f "$ROOT/docker-compose.dev.yml" up -d db wb-parser >/dev/null \
-    || die "the database and the crawler did not start"
-ok "starting $DB_CONTAINER and $PARSER_CONTAINER"
-
-bash "$ROOT/scripts/wait-healthy.sh" "$DB_CONTAINER" 120 >/dev/null
-ok "$DB_CONTAINER healthy"
-
-# The crawler applies its migrations and seeds itself. Readiness says both
-# happened — it is the crawler's own statement, not a guess.
-export CRAWLER_API_URL="http://localhost:$PARSER_PORT"
-export CRAWLER_API_KEY="$CATALOG_API_KEY"
-bash "$ROOT/scripts/wait-catalog-ready.sh" 240 >/dev/null \
-    || die "the crawler did not become ready — see: docker logs $PARSER_CONTAINER"
-ok "crawler ready on $CRAWLER_API_URL"
+# Readiness is the crawler's own statement that the catalog can be served.
+bash "$ROOT/scripts/wait-catalog-ready.sh" "$CATALOG_TIMEOUT" >/dev/null \
+    || die "the catalog API at $CRAWLER_API_URL did not become ready.
+       Is the crawler running, and is the address and the key the ones it
+       expects?"
+ok "catalog API ready at $CRAWLER_API_URL"
 
 # ── storefront ───────────────────────────────────────────────────────────────
 
-if [ "${STACK_SKIP_SITE:-0}" = "1" ]; then
-    warn "skipping the storefront (STACK_SKIP_SITE=1)"
+step "Storefront"
+if running_pid "$STACK_DIR/site.pid" "$SITE_MATCH" >/dev/null; then
+    ok "already running (pid $(cat "$STACK_DIR/site.pid"))"
 else
-    step "Storefront"
-    if running_pid "$STACK_DIR/site.pid" "$SITE_MATCH" >/dev/null; then
-        ok "already running (pid $(cat "$STACK_DIR/site.pid"))"
-    else
-        launch "$STACK_DIR/site.pid" "$LOG_DIR/site.log" \
-            env \
-            CRAWLER_API_URL="$CRAWLER_API_URL" \
-            CRAWLER_API_KEY="$CATALOG_API_KEY" \
-            NEXT_PUBLIC_SITE_URL="http://localhost:$SITE_PORT" \
-            NEXT_TELEMETRY_DISABLED=1 \
-            PORT="$SITE_PORT" \
-            npm run dev
+    launch "$STACK_DIR/site.pid" "$LOG_DIR/site.log" \
+        env \
+        CRAWLER_API_URL="$CRAWLER_API_URL" \
+        CRAWLER_API_KEY="$CRAWLER_API_KEY" \
+        NEXT_PUBLIC_SITE_URL="http://localhost:$SITE_PORT" \
+        NEXT_TELEMETRY_DISABLED=1 \
+        PORT="$SITE_PORT" \
+        npm run dev
 
-        waited=0
-        while [ "$waited" -lt 120 ]; do
-            if curl -fsS -o /dev/null -m 3 "http://localhost:$SITE_PORT/" 2>/dev/null; then
-                break
-            fi
-            sleep 2
-            waited=$((waited + 2))
-        done
-        ok "storefront on http://localhost:$SITE_PORT (log: $LOG_DIR/site.log)"
-    fi
+    waited=0
+    while [ "$waited" -lt 120 ]; do
+        if curl -fsS -o /dev/null -m 3 "http://localhost:$SITE_PORT/" 2>/dev/null; then
+            break
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    ok "storefront on http://localhost:$SITE_PORT (log: $LOG_DIR/site.log)"
 fi
 
 # ── report ───────────────────────────────────────────────────────────────────
 
 step "Ready"
-echo "  database    docker container $DB_CONTAINER (no published port)"
-echo "  crawler     $CRAWLER_API_URL"
-[ "${STACK_SKIP_SITE:-0}" = "1" ] || echo "  storefront  http://localhost:$SITE_PORT"
+echo "  catalog     $CRAWLER_API_URL"
+echo "  storefront  http://localhost:$SITE_PORT"
 echo ""
 echo "  the catalog API answers:"
 echo "    curl -H \"X-Api-Key: \$CRAWLER_API_KEY\" $CRAWLER_API_URL/stats"
 echo ""
-echo "  Stop everything with: just stack-down"
+echo "  Stop the storefront with: just stack-down"

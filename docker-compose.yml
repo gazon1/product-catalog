@@ -1,12 +1,14 @@
 # Production / VPS compose.
 #
-# The site talks to the crawler's PostgreSQL over the network and never manages
-# it: no `db` service here, no volume, no migration step. `docker compose up` on
-# the VPS therefore cannot alter the crawler's database — which is the whole
-# reason the read-only guarantee does not depend on anybody remembering to be
-# careful.
+# The site is a client of the crawler's API and nothing else. There is no `db`
+# service here, no volume, no migration step and no parser service: the crawler
+# and its database are operated by the crawler repository, and `docker compose
+# up` on the VPS cannot touch either of them.
 #
-# For a local database with synthetic data use docker-compose.dev.yml instead.
+# The catalog API is reached over the private NetBird network: the crawler
+# publishes no host port, so the address is the crawler's NetBird address and
+# the container has to be able to route to it. The deploy workflow checks that
+# from inside the container, not only from the host.
 
 services:
   product-catalog:
@@ -18,13 +20,20 @@ services:
     image: ghcr.io/${IMAGE_OWNER:-gazon1}/product-catalog:${TAG:?TAG must be set to the commit SHA tag, e.g. TAG=$(git rev-parse --short HEAD)}
     container_name: product-catalog
     restart: unless-stopped
-    env_file:
-      - .env
+    # Named explicitly, one variable at a time, instead of `env_file: .env`.
+    # The container gets the catalog's address and the key that opens it — and
+    # nothing else that happens to lie in the server's .env. A file that hands
+    # the container everything it contains is a file that can hand it a database
+    # credential, and the storefront has no business holding one.
     environment:
-      # Overridable from .env, but defaulted here so `docker compose config`
-      # shows a complete picture of what the container needs.
       NODE_ENV: production
       PORT: "3000"
+      # The crawler's address and key. Both are read from the .env file next to
+      # this compose file, which the deploy workflow writes; the key never
+      # lives in the repository.
+      CRAWLER_API_URL: ${CRAWLER_API_URL:?CRAWLER_API_URL must be set — the crawler's NetBird address}
+      CRAWLER_API_KEY: ${CRAWLER_API_KEY:?CRAWLER_API_KEY must be set — the crawler's CATALOG_API_KEY}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
     # Reached through the Caddy container that gazon1/Caddy-vps manages, over
     # the shared external network. NOT a published port: nothing outside this
     # machine should reach the storefront directly, and publishing
@@ -36,7 +45,7 @@ services:
     expose:
       - "3000"
     # The crawler writes on a schedule; a site container restarting in a tight
-    # loop while the database is down would only add noise on that machine.
+    # loop while the catalog API is down would only add noise on that machine.
     healthcheck:
       test:
         - CMD
