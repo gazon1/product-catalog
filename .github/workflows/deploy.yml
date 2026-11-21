@@ -202,6 +202,13 @@ jobs:
           set -euo pipefail
           cd "$APP_DIR"
 
+          # Decoded here, on the server: the encoded text is inert, the value
+          # is not. A decode that fails stops the deploy — it does not write
+          # an empty key and sail on.
+          api_url="\$(printf '%s' '$b64_url' | base64 -d)"
+          api_key="\$(printf '%s' '$b64_key' | base64 -d)"
+          site_url="\$(printf '%s' '$b64_public' | base64 -d)"
+
           # The file keeps everything else it had: the public URL and anything
           # else the server needs stay as they were.
           umask 077
@@ -216,13 +223,13 @@ jobs:
             echo "# The key never lives in the repository, and this file is not in git."
             # Single quotes: compose reads a single-quoted value literally, so a
             # '$' in the key is not rewritten on the way into the container.
-            printf "CRAWLER_API_URL='%s'\n" "\$(printf '%s' '$b64_url' | base64 -d)"
-            printf "CRAWLER_API_KEY='%s'\n" "\$(printf '%s' '$b64_key' | base64 -d)"
+            printf "CRAWLER_API_URL='%s'\n" "\$api_url"
+            printf "CRAWLER_API_KEY='%s'\n" "\$api_key"
             echo ""
             echo "# The site's own address, written here so that the sitemap, the"
             echo "# robots.txt and the canonical tags name the address that is"
             echo "# actually served. One variable, one address."
-            printf "NEXT_PUBLIC_SITE_URL='%s'\n" "\$(printf '%s' '$b64_public' | base64 -d)"
+            printf "NEXT_PUBLIC_SITE_URL='%s'\n" "\$site_url"
           } >> .env.new
           mv .env.new .env
           chmod 600 .env
