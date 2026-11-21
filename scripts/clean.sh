@@ -3,24 +3,21 @@
 # Leave nothing behind: the local stack, the build output, the test artefacts.
 #
 #   just clean
-#   just clean --purge     # also drop the dev database's volume (destructive)
 #   just clean --modules   # also remove node_modules (a full reinstall follows)
 #
 # WHY ONE COMMAND
 #
-# The local stack, the build output and the test artefacts are three different
-# kinds of leftovers, and each of them is easy to forget: a container left
-# running holds pooled connections to the dev database, `.next` holds a build
-# of code that no longer exists, and `build/test-results` holds the report of
-# a run that happened yesterday. A command that removes all three is worth
-# more than three commands that each have to be remembered.
+# The storefront, the build output and the test artefacts are three different
+# kinds of leftovers, and each of them is easy to forget: a `next dev` left
+# running holds :3000, `.next` holds a build of code that no longer exists, and
+# `build/test-results` holds the report of a run that happened yesterday. A
+# command that removes all three is worth more than three commands that each
+# have to be remembered.
 #
 # WHAT IT DOES NOT TOUCH
 #
-# The dev database's volume is kept, unless `--purge` says otherwise: it holds
-# the synthetic seed and, after a real crawl, hundreds of scraped rows. A
-# stack that forgets its state between sessions is an annoyance; a stack that
-# forgets its data is a lost afternoon.
+# The crawler and its database are not ours: they run in the crawler
+# repository, and this script does not know their names.
 #
 # node_modules is kept by default: reinstalling it takes minutes and changes
 # nothing about the state of the code. `--modules` is the explicit ask.
@@ -29,15 +26,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Every Docker call is bounded: a daemon that does not answer has to say so
-# instead of hanging the script.
-. "$ROOT/scripts/docker-timeout.sh"
-
-PURGE=0
 MODULES=0
 for arg in "$@"; do
     case "$arg" in
-        --purge)   PURGE=1 ;;
         --modules) MODULES=1 ;;
         *) printf 'unknown option: %s\n' "$arg" >&2; exit 2 ;;
     esac
@@ -58,11 +49,7 @@ step "The local stack"
 # and the script ends with a non-zero status — a clean that could not clean
 # everything must not say it did.
 stack_failed=0
-if [ "$PURGE" = "1" ]; then
-    bash scripts/stack-down.sh --purge || stack_failed=1
-else
-    bash scripts/stack-down.sh || stack_failed=1
-fi
+bash scripts/stack-down.sh || stack_failed=1
 if [ "$stack_failed" -ne 0 ]; then
     warn "the local stack was not stopped (see above)"
 fi

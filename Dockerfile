@@ -3,10 +3,10 @@
 # Next.js standalone build. Multi-stage: deps → builder → runner.
 #
 # `output: 'standalone'` in next.config.mts means the runner only copies a
-# self-contained server plus the traced subset of node_modules it actually needs
-# (`pg` and its protocol helpers) — which is why the crawler repository is not
-# needed at runtime, and why this image can be deployed with no code checkout
-# besides this repository.
+# self-contained server plus the traced subset of node_modules it actually
+# needs — which is why the crawler repository is not needed at runtime, and
+# why this image can be deployed with no code checkout besides this
+# repository.
 
 ARG NODE_VERSION=22-bookworm-slim
 
@@ -32,11 +32,22 @@ COPY . .
 # Creating a matching placeholder here keeps that COPY idempotent.
 RUN ls public/ > /dev/null 2>&1 || mkdir public
 
-# DATABASE_URL is *not* baked in and must not be: the image is built in CI, where
-# no production credential exists, and the value differs per environment. It is
-# read at runtime from the container environment (see docker-compose.yml), which
-# is why nothing here needs a build arg for it.
+# CRAWLER_API_URL and CRAWLER_API_KEY are *not* baked in and must not be: the
+# image is built in CI, where no production credential exists, and the value
+# differs per environment. They are read at runtime from the container
+# environment (see docker-compose.yml), which is why nothing here needs a build
+# arg for them.
 RUN npm run build
+
+# The key is a server-side secret, and a browser chunk must not even mention
+# where it comes from: the name of the variable shows up in a client chunk
+# only when a client component pulled the server module that reads the key.
+# The check lives in the build, so it holds for every image — the CI one too —
+# and not only for the image that is deployed.
+RUN if grep -rlF 'CRAWLER_API_KEY' .next/static/chunks 2>/dev/null | grep -q .; then \
+      echo 'A client bundle reads CRAWLER_API_KEY. The key is a server-side secret.'; \
+      exit 1; \
+    fi
 
 # ── runner ───────────────────────────────────────────────────────────────────
 FROM node:${NODE_VERSION} AS runner
@@ -60,9 +71,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 USER nextjs
 EXPOSE 3000
 
-# Hits /api/health, which returns 503 when the database is unreachable — so a
-# container with no working DATABASE_URL never reports healthy, and the deploy
-# workflow's wait-healthy step fails instead of green-lighting a dead site.
+# Hits /api/health, which returns 503 when the catalog API is unreachable — so
+# a container that cannot reach the crawler over NetBird never reports
+# healthy, and the deploy workflow's wait-healthy step fails instead of
+# green-lighting a dead site.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 

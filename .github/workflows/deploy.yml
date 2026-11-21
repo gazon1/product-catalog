@@ -4,12 +4,19 @@ name: Deploy to VPS
 # GHCR (see ci.yml); getting that image onto the server is always a deliberate
 # action.
 #
-# Unlike the previous solution there is no migration step here, and that is the
-# point: the site reads the crawler's database with a SELECT-only role, so a
-# deploy cannot alter it. Nothing in this workflow needs to be reversible.
+# Only the storefront is deployed here. The crawler and its database are
+# operated in the crawler repository, and the storefront reaches the crawler
+# over the private NetBird network — so this workflow neither starts the
+# crawler nor checks which crawler is running.
+#
+# There is no migration step either, and that is the point: the site has no
+# database connection at all, so a deploy cannot alter the crawler's database.
+# Nothing in this workflow needs to be reversible.
 #
 # Required repository secrets:
-#   VPS_HOST, VPS_USER, VPS_PORT, VPS_APP_DIR, VPS_SSH_KEY
+#   VPS_HOST, VPS_USER, VPS_PORT, VPS_APP_DIR, VPS_SSH_KEY, CRAWLER_API_KEY
+# Required repository variables:
+#   CRAWLER_API_URL (the crawler's address in the NetBird network), PUBLIC_URL
 on:
   workflow_dispatch:
     inputs:
@@ -118,54 +125,21 @@ jobs:
           fi
           echo "Route is in sync."
 
-      # The storefront and the crawler are two services, and the storefront is
-      # verified against exactly one crawler image: the digest it pins. A
-      # storefront that passed every check against that image, deployed against
-      # a different one, is a storefront nobody checked.
-      #
-      # The crawler records what is running in `.deployed-digest` (the Ansible
-      # role writes it on success), and the pin names what the storefront was
-      # checked against. They are two files on two machines, and nothing else
-      # compares them — so this step does.
-      - name: Check the running crawler is the one the pin names
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT }}
-        run: |
-          pin=$(grep -vE '^\s*(#|$)' contract/crawler-image.txt | head -1)
-          digest="${pin##*@}"
-          case "$digest" in
-            sha256:*) ;;
-            *)
-              echo "::error::the pin names '$pin', which is not a digest. A production pin is a digest: a tag can be moved, a digest cannot."
-              exit 1
-              ;;
-          esac
-          running=$(ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            "cat /opt/wbparser/.deployed-digest 2>/dev/null" || echo "<missing>")
-          echo "pin     $digest"
-          echo "running $running"
-          if [ "$running" != "$digest" ]; then
-            echo "::error::the crawler on the server is '$running', and the pin names '$digest'."
-            echo "::error::Deploy the crawler first (in the crawler repository: just wbparser-deploy -e wbparser_tag=<sha>), or move the pin to the crawler that runs."
-            exit 1
-          fi
-          echo "The running crawler is the one the storefront was checked against."
-
       # The catalog's key reaches the storefront as a file on the server, not as
       # a value in the compose file and not as a line in the repository.
       #
-      # The compose file reads `.env` through `env_file`, and compose
-      # interpolates `${...}` in the values it passes — so a key with a `$` in
-      # it would be rewritten on the way in. The file is written by the deploy
-      # instead, and the key comes from a secret, so it is in neither the
-      # repository nor the workflow's log.
+      # The compose file names the variables it passes explicitly, and compose
+      # reads the server's .env file to fill them in — and compose interpolates
+      # `${...}` inside a .env value, so an unquoted key with a `$` in it would
+      # be rewritten on the way in. The values are therefore written
+      # single-quoted: compose reads a single-quoted value literally. The key
+      # comes from a secret, so it is in neither the repository nor the
+      # workflow's log.
       #
       # The address is a repository variable, not a constant: the crawler
-      # publishes no host port on purpose, so the storefront reaches it by its
-      # container name over the shared network. The default below is that
-      # name; the variable exists for the day the topology differs.
+      # publishes no host port and is not deployed with the storefront — it is
+      # reached over the private NetBird network, and the address is the
+      # crawler's address in that network.
       - name: The storefront gets the catalog's address and key
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -173,7 +147,7 @@ jobs:
           VPS_PORT: ${{ secrets.VPS_PORT }}
           APP_DIR: ${{ secrets.VPS_APP_DIR }}
           CRAWLER_API_KEY: ${{ secrets.CRAWLER_API_KEY }}
-          CRAWLER_API_URL: ${{ vars.CRAWLER_API_URL || 'http://wb-parser:8080' }}
+          CRAWLER_API_URL: ${{ vars.CRAWLER_API_URL }}
           # The site's own public address — the same value the route names and
           # the smoke test asks. The sitemap, robots.txt and the canonical
           # tags are built from it, so a value that is not the address the
@@ -186,21 +160,65 @@ jobs:
             echo "::error::The value is the crawler's own CATALOG_API_KEY: the same key in two places, and the crawler accepts a list, so a rotation can add the new key first."
             exit 1
           fi
+          if [ -z "${CRAWLER_API_URL:-}" ]; then
+            echo "::error::The repository variable CRAWLER_API_URL is not set."
+            echo "::error::It is the crawler's address in the private NetBird network — the crawler publishes no host port, and the storefront reaches it over the overlay."
+            echo "::error::Set it in Settings → Secrets and variables → Actions → Variables."
+            exit 1
+          fi
           if [ -z "${PUBLIC_URL:-}" ]; then
             echo "::error::The repository variable PUBLIC_URL is not set."
             echo "::error::It is the site's own address: the route serves it, and the sitemap and the canonical tags are built from it."
             echo "::error::Set it in Settings → Secrets and variables → Actions → Variables."
             exit 1
           fi
+
+          # A value that cannot be written into the .env file is refused here,
+          # loudly, instead of being written and misread later: a single quote
+          # would end the quoted value, a newline would end the line.
+          for value in "$CRAWLER_API_URL" "$CRAWLER_API_KEY" "$PUBLIC_URL"; do
+            case "$value" in
+              *"'"*)
+                echo "::error::The catalog address, the catalog key or the public URL contains a single quote, which cannot be written into the server's .env file."
+                exit 1
+                ;;
+              *$'\n'*)
+                echo "::error::The catalog address, the catalog key or the public URL contains a newline, which cannot be written into the server's .env file."
+                exit 1
+                ;;
+            esac
+          done
+
+          # The three values travel base64-encoded. The encoded text is
+          # [A-Za-z0-9+/=] only, so nothing in it can be read as shell syntax
+          # when the remote script is parsed, and it is decoded only there — a
+          # key that contains `$(...)` or a backtick stays a value instead of
+          # becoming a command on the server.
+          b64_url=$(printf '%s' "$CRAWLER_API_URL" | base64 -w0)
+          b64_key=$(printf '%s' "$CRAWLER_API_KEY" | base64 -w0)
+          b64_public=$(printf '%s' "$PUBLIC_URL" | base64 -w0)
+
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<EOF
           set -euo pipefail
           cd "$APP_DIR"
 
+          # Decoded here, on the server: the encoded text is inert, the value
+          # is not. A decode that fails stops the deploy — it does not write
+          # an empty key and sail on.
+          api_url="\$(printf '%s' '$b64_url' | base64 -d)"
+          api_key="\$(printf '%s' '$b64_key' | base64 -d)"
+          site_url="\$(printf '%s' '$b64_public' | base64 -d)"
+
           # The file keeps everything else it had: the public URL and anything
-          # else the server needs stay as they were.
+          # else the server needs stay as they were. The database credentials
+          # are the exception: the storefront does not connect to a database
+          # any more, so a credential of the crawler's database has no reason
+          # to stay on its disk. That covers every spelling of one —
+          # DATABASE_*, POSTGRES_* and libpq's own PG* — with or without the
+          # `export` prefix compose accepts in a .env file.
           umask 077
           if [ -f .env ]; then
-            grep -vE '^(CRAWLER_API_URL|CRAWLER_API_KEY|NEXT_PUBLIC_SITE_URL)=' .env > .env.new || true
+            grep -vE '^(export[[:space:]]+)?(CRAWLER_API_URL|CRAWLER_API_KEY|NEXT_PUBLIC_SITE_URL|DATABASE_URL|DATABASE_[A-Z_]*|POSTGRES_[A-Z_]*|PG[A-Z_]*)=' .env > .env.new || true
           else
             : > .env.new
           fi
@@ -208,13 +226,15 @@ jobs:
             echo ""
             echo "# The catalog's address and key, written by the deploy workflow."
             echo "# The key never lives in the repository, and this file is not in git."
-            echo "CRAWLER_API_URL=$CRAWLER_API_URL"
-            echo "CRAWLER_API_KEY=$CRAWLER_API_KEY"
+            # Single quotes: compose reads a single-quoted value literally, so a
+            # '$' in the key is not rewritten on the way into the container.
+            printf "CRAWLER_API_URL='%s'\n" "\$api_url"
+            printf "CRAWLER_API_KEY='%s'\n" "\$api_key"
             echo ""
             echo "# The site's own address, written here so that the sitemap, the"
             echo "# robots.txt and the canonical tags name the address that is"
             echo "# actually served. One variable, one address."
-            echo "NEXT_PUBLIC_SITE_URL=$PUBLIC_URL"
+            printf "NEXT_PUBLIC_SITE_URL='%s'\n" "\$site_url"
           } >> .env.new
           mv .env.new .env
           chmod 600 .env
@@ -229,10 +249,17 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
+          # Encoded for the same reason as the key above: the remote script is
+          # parsed as shell, so nothing is expanded into it that could be read
+          # as shell.
+          b64_tag=$(printf '%s' "$TAG" | base64 -w0)
+          b64_dir=$(printf '%s' "$APP_DIR" | base64 -w0)
+
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<EOF
           set -euo pipefail
-          cd "$APP_DIR"
-          export TAG="$TAG"
+          app_dir="\$(printf '%s' '$b64_dir' | base64 -d)"
+          cd "\$app_dir"
+          export TAG="\$(printf '%s' '$b64_tag' | base64 -d)"
 
           # The compose file lives in this directory, so it must match the
           # commit being deployed. `pull --ff-only` refuses to merge or rebase,
@@ -243,7 +270,7 @@ jobs:
             git pull --ff-only
             echo "Deploy checkout is now at \$(git rev-parse --short HEAD) on \$(git rev-parse --abbrev-ref HEAD)"
           else
-            echo "::warning::$APP_DIR is not a git checkout — deploying the files as they are on disk."
+            echo "::warning::\$app_dir is not a git checkout — deploying the files as they are on disk."
           fi
 
           # Git preserves the exec bit only for files it tracks as executable.
@@ -271,6 +298,58 @@ jobs:
 
           echo "→ Final state:"
           docker compose ps
+          EOF
+
+      # The catalog API is on the other side of the private NetBird network, and
+      # the container's route to it is not the host's route to it. A check from
+      # the host proves nothing about the container: the container that cannot
+      # reach the crawler serves error pages while the host curls it fine.
+      #
+      # So the probe runs inside the container, with the container's own
+      # environment — the address and the key it was given. The key is never
+      # passed on the command line and never printed: it is read from the
+      # environment inside the container and used as a header.
+      - name: The storefront reaches the catalog API from inside the container
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<'EOF'
+          set -euo pipefail
+
+          # The same address the client builds: the prefix is added when the
+          # address does not already carry it.
+          docker exec product-catalog node -e "
+            const raw = process.env.CRAWLER_API_URL || '';
+            const base = raw.endsWith('/') ? raw.slice(0, -1) : raw;
+            const url = base.endsWith('/api/catalog/v1') ? base : base + '/api/catalog/v1';
+            fetch(url + '/ready', { headers: { 'X-Api-Key': process.env.CRAWLER_API_KEY || '' } })
+              .then((r) => { console.log('the catalog API answered', r.status); process.exit(r.ok ? 0 : 1); })
+              .catch((e) => { console.error('the catalog API is unreachable from the container:', e.message); process.exit(1); });
+          " || {
+            echo "::error::The storefront container cannot reach the catalog API."
+            echo "::error::Check that CRAWLER_API_URL is the crawler's address in the NetBird network and that the container can route to it."
+            exit 1
+          }
+
+          # The key is a server-side secret: it must not be in the bundle that
+          # the browser downloads. The container is the place where the bundle
+          # actually is, so the bundle is checked where it is.
+          if docker exec product-catalog sh -c 'grep -rlF "$CRAWLER_API_KEY" /app/.next /app/server.js 2>/dev/null' | grep -q .; then
+            echo "::error::The catalog key is in the storefront's build output. It must never reach the browser."
+            exit 1
+          fi
+
+          # The name of the variable must not be in the browser's chunks either:
+          # it is there only when a client component pulled the server module
+          # that reads the key. The image build refuses such a bundle too — this
+          # check sees the bundle that was actually deployed.
+          if docker exec product-catalog sh -c 'grep -rlF "CRAWLER_API_KEY" /app/.next/static/chunks 2>/dev/null' | grep -q .; then
+            echo "::error::A client bundle of the storefront reads CRAWLER_API_KEY. The key is a server-side secret."
+            exit 1
+          fi
+          echo "the catalog API is reachable from the container, and the key is not in the bundle"
           EOF
 
       # Runs from the runner through the public domain, so it also proves Caddy,

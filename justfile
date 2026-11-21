@@ -17,45 +17,37 @@ default:
 # ==============================================================================
 # Local development
 # ==============================================================================
-[doc('Start the crawler and its database (the crawler creates the schema and seeds it)')]
-db-up:
-    docker compose -f docker-compose.dev.yml up -d db wb-parser
-    @# Reuses the same definition of "healthy" as the deploy workflow, rather
-    @# than a second inline check that could drift from it.
-    @bash scripts/wait-healthy.sh product-catalog-dev-db 120
-    @# Readiness is the crawler's own statement that the catalog can be served:
-    @# its pool runs a statement and the columns it reads are there.
-    @bash scripts/wait-catalog-ready.sh 240
-
-[doc('Drop and recreate the dev database and the crawler from scratch')]
-db-reset:
-    # The crawler's migrations and its seed are applied by the crawler itself, on
-    # every start. Only the volume has to go for a clean database.
-    docker compose -f docker-compose.dev.yml down -v
-    docker compose -f docker-compose.dev.yml up -d db wb-parser
-    @bash scripts/wait-healthy.sh product-catalog-dev-db 120
-    @bash scripts/wait-catalog-ready.sh 240
-
-[doc('Stop the dev database and the crawler')]
-db-down:
-    docker compose -f docker-compose.dev.yml down
-
-[doc('Run next dev on :3000 against the running crawler')]
+# The storefront on the host, in dev mode, against a crawler that somebody else
+# runs. The crawler and its database are not ours: they live in the crawler
+# repository and are started from there.
+#
+# The address and the key come from the environment or from `.env` — the same
+# two values production uses. A key that contains a `$` is written in single
+# quotes, and the quotes are not part of the value: the same reader that
+# `stack-up` uses reads them here, so both recipes talk to the catalog with
+# the same key.
+[doc('Run next dev on :3000 against a crawler that is already running')]
 dev:
-    CRAWLER_API_URL=$(grep -E '^CRAWLER_API_URL=' .env 2>/dev/null | cut -d= -f2- || echo http://localhost:8080) \
-    CRAWLER_API_KEY=$(grep -E '^CRAWLER_API_KEY=' .env 2>/dev/null | cut -d= -f2- || echo local-dev-catalog-key) \
-        npm run dev
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/read-env.sh
+    api_url="$(read_env CRAWLER_API_URL)"
+    api_key="$(read_env CRAWLER_API_KEY)"
+    [ -n "$api_url" ] || { echo "error: CRAWLER_API_URL is not set. Put it in .env (see .env.example)." >&2; exit 1; }
+    [ -n "$api_key" ] || { echo "error: CRAWLER_API_KEY is not set. Put it in .env (see .env.example)." >&2; exit 1; }
+    export CRAWLER_API_URL="$api_url" CRAWLER_API_KEY="$api_key"
+    npm run dev
 
-# The whole stack, the way production runs it: one database, the crawler that
-# owns it, and this storefront that reads it over HTTP. Two databases would test
-# a topology nobody deploys. `just stack-down` stops all of it.
-[doc('Bring up the crawler + its database + the storefront')]
+# The storefront, on the host, against a crawler that somebody else runs. The
+# crawler and its database are not ours: they live in the crawler repository and
+# are started from there. `just stack-down` stops the storefront.
+[doc('Bring up the storefront (the crawler runs somewhere else)')]
 stack-up:
     bash scripts/stack-up.sh
 
-[doc('Stop the whole stack (add --purge to also drop the database volume)')]
-stack-down *args:
-    bash scripts/stack-down.sh {{args}}
+[doc('Stop the storefront')]
+stack-down:
+    bash scripts/stack-down.sh
 
 [doc('Remove the local stack, the build output and the test artefacts')]
 clean *args:
@@ -178,73 +170,3 @@ route-drift host="" user="":
       echo "OUT OF SYNC — apply it with: just route"
       exit 1
     fi
-
-# ==============================================================================
-# Ansible deploy (parser + migrations + wbshop)
-# ==============================================================================
-# Full stack deploy: parser → Flyway migrations → wbshop.
-# Use this when you need to update the parser or run migrations.
-#
-# For wbshop-only updates (no parser, no migrations), use the GitHub Actions
-# "Deploy to VPS" workflow instead — it's simpler and faster.
-#
-# Delegates to ~/Caddy-vps/just wbshop-deploy.
-#
-# Required env vars:
-#   CADDY_VPS_DIR  - path to Caddy-vps checkout (default: ~/Caddy-vps)
-#   PARSER_REPO    - path to wb-parser-kotlin-new/sailfish checkout
-#   WBPARSER_DB_PASSWORD, WBPARSER_ADMIN_PASSWORD, WBPARSER_ADMIN_API_KEY
-#
-# Usage:
-#   just ansible-deploy              # deploy current HEAD
-#   just ansible-deploy <tag>        # deploy a specific tag
-#   just ansible-deploy -- --check   # dry-run
-# ==============================================================================
-
-PARSER_REPO := env('PARSER_REPO', justfile_directory() / '..' / 'wb-parser-kotlin-new' / 'sailfish')
-PARSER_COMPOSE_SRC := PARSER_REPO / "deploy" / "docker-compose.vps.yml"
-
-[doc('Deploy full stack via Ansible: parser → migrations → wbshop')]
-ansible-deploy tag *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd "{{ justfile_directory() }}"
-
-    WBSHOP_TAG="{{ tag }}"
-    if [[ -z "$WBSHOP_TAG" ]]; then
-      WBSHOP_TAG="$(git rev-parse --short HEAD)"
-    fi
-
-    if [[ ! -f "{{ CADDY_VPS_DIR }}/justfile" ]]; then
-      echo "❌ Caddy-vps not found at {{ CADDY_VPS_DIR }}" >&2
-      echo "   Set CADDY_VPS_DIR or clone: git clone git@github.com:gazon1/Caddy-vps.git {{ CADDY_VPS_DIR }}" >&2
-      exit 1
-    fi
-
-    if [[ ! -f "{{ PARSER_COMPOSE_SRC }}" ]]; then
-      echo "❌ Parser compose not found: {{ PARSER_COMPOSE_SRC }}" >&2
-      echo "   Set PARSER_REPO to the wb-parser-kotlin-new/sailfish checkout." >&2
-      exit 1
-    fi
-
-    if [[ -n "$(git status --porcelain)" ]]; then
-      echo "⚠️  Working tree is dirty:"
-      git status --short
-      echo ""
-    fi
-
-    echo "🚀 Deploying wbshop stack..."
-    echo "   tag:     $WBSHOP_TAG"
-    echo "   parser:  {{ PARSER_COMPOSE_SRC }}"
-    echo ""
-
-    just --justfile "{{ CADDY_VPS_DIR }}/justfile" wbshop-deploy \
-        -e "wbparser_tag=$WBSHOP_TAG" \
-        -e "wbshop_tag=$WBSHOP_TAG" \
-        -e "wbparser_compose_src={{ PARSER_COMPOSE_SRC }}" \
-        -e "wbshop_compose_src={{ justfile_directory() }}/docker-compose.yml" \
-        {{ args }}
-
-[doc('Dry-run Ansible deploy')]
-ansible-dry-run tag="":
-    just {{ justfile_directory() }}/justfile ansible-deploy "{{ tag }}" -- --check
