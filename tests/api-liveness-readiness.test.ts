@@ -82,7 +82,7 @@ describe('readiness reports the parser on its own endpoint', () => {
     expect(body.detail).toBe('unreachable');
   });
 
-  it('names a rejected key and a deadline distinctly, and leaks no detail', async () => {
+  it('names a rejected key distinctly, and leaks no internal detail', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 120_000);
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -98,5 +98,38 @@ describe('readiness reports the parser on its own endpoint', () => {
     vi.stubGlobal('fetch', () => Promise.reject(new TypeError('fetch failed')));
     const unreachableBody = (await (await readiness()).json()) as { detail: string };
     expect(unreachableBody.detail).not.toContain('crawler.test');
+  });
+
+  // Медленный краулер — не то же, что лежащий: у первого запрос идёт, у
+  // второго нет. Класс отказа обязан это различать, иначе оператор идёт искать
+  // упавший сервис вместо медленного запроса.
+  //
+  // Свежий модуль: ответ готовности кэшируется в нём на пять секунд, а
+  // предыдущие случаи сдвигали часы вперёд — на настоящих часах этот кэш
+  // выглядел бы свежим и вернул бы «недоступен» до пробы.
+  it('names a crawler that never answers as a timeout', async () => {
+    vi.useRealTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.resetModules();
+    const { GET: fresh } = await import('@/app/api/ready/route');
+
+    // Отвечает только тогда, когда клиент сам оборвёт запрос по дедлайну: так
+    // выглядит краулер, который принял соединение и молчит.
+    vi.stubGlobal(
+      'fetch',
+      (_input: unknown, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+        }),
+    );
+
+    const response = await fresh();
+    const body = (await response.json()) as { ok: boolean; detail: string };
+
+    expect(response.status).toBe(503);
+    expect(body.ok).toBe(false);
+    expect(body.detail).toBe('timeout');
   });
 });

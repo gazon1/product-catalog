@@ -32,42 +32,17 @@ container="${1:-product-catalog}"
 # swallowed the request — never refuses and never answers. The probe has to be
 # bounded, or the deploy step hangs until the job's own timeout: a blackholed
 # route would read as a hung deployment, not as the outage it is.
-probe_timeout_ms="${CRAWLER_PROBE_TIMEOUT_MS:-5000}"
-case "$probe_timeout_ms" in
-    '' | *[!0-9]*)
-        echo "CRAWLER_PROBE_TIMEOUT_MS must be a number of milliseconds, got '$probe_timeout_ms'" >&2
-        exit 1
-        ;;
-esac
-# Zero aborts every request immediately, and Node clamps anything above the
-# signed 32-bit timer maximum (2147483647) to a 1 ms timeout with only a warning
-# — both are this deploy's misconfiguration, and both would otherwise be
-# reported as an outage of somebody else's service.
 #
-# The bound is checked on the digits themselves, not with shell arithmetic:
-# `$((…))` wraps silently past its own integer range, so a huge number would
-# pass the check. Leading zeros are stripped first — `10#` is what makes bash
-# read them as decimal, and the value never reaches bash arithmetic again.
-#
-# The value travels to node through the environment and is read with Number()
-# there: interpolating the string into the script would make `0008` a syntax
-# error and `010` the octal 8.
-digits="${probe_timeout_ms#"${probe_timeout_ms%%[!0]*}"}"
-if [ "${#digits}" -gt 10 ] ||
-   { [ "${#digits}" -eq 10 ] && [[ "$digits" > "2147483647" ]]; } ||
-   [ -z "${digits//0/}" ]; then
-    echo "CRAWLER_PROBE_TIMEOUT_MS must be between 1 and 2147483647 ms, got '$probe_timeout_ms'" >&2
-    exit 1
-fi
-
+# The deadline is a constant, not a setting: the deploy needs one number, and a
+# knob nobody asked for is a knob that needs its own validation.
 set +e
-docker exec -e CRAWLER_PROBE_TIMEOUT_MS="$probe_timeout_ms" "$container" node -e "
+docker exec "$container" node -e "
   const raw = process.env.CRAWLER_API_URL || '';
   const base = raw.endsWith('/') ? raw.slice(0, -1) : raw;
   const url = base.endsWith('/api/catalog/v1') ? base : base + '/api/catalog/v1';
   fetch(url + '/ready', {
     headers: { 'X-Api-Key': process.env.CRAWLER_API_KEY || '' },
-    signal: AbortSignal.timeout(Number(process.env.CRAWLER_PROBE_TIMEOUT_MS)),
+    signal: AbortSignal.timeout(5000),
   })
     .then((r) => {
       console.log('the catalog API answered', r.status);
