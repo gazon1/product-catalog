@@ -75,7 +75,7 @@ services:
     # Published on loopback only, so a human can curl the catalog API. The
     # storefront reaches it over the compose network, by service name.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${STACK_PARSER_PORT:-8080}:8080"
 
   web:
     build:
