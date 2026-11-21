@@ -43,11 +43,16 @@ docker exec "$container" node -e "
   fetch(url + '/ready', {
     headers: { 'X-Api-Key': process.env.CRAWLER_API_KEY || '' },
     signal: AbortSignal.timeout(5000),
+    // A redirect means the address is not the API: fetch would follow it to
+    // whatever answers 200 there, and a wrong CRAWLER_API_URL would pass.
+    redirect: 'manual',
   })
     .then((r) => {
       console.log('the catalog API answered', r.status);
       if (r.ok) process.exit(0);
-      process.exit([401, 403, 404].includes(r.status) ? 2 : 1);
+      // 401/403/404 and a 3xx are the same class: what this deploy wrote is
+      // not the catalog API. Everything else is the catalog not serving now.
+      process.exit([401, 403, 404].includes(r.status) || (r.status >= 300 && r.status < 400) ? 2 : 1);
     })
     .catch((e) => { console.error('the catalog API is unreachable from the container:', e.message); process.exit(1); });
 "

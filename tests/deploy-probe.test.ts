@@ -127,6 +127,25 @@ describe('the container-side catalog probe', () => {
     expect(output).toContain('it refused the request');
   });
 
+  // A redirect means the address is not the catalog API. `fetch` would follow
+  // it, and a wrong CRAWLER_API_URL pointing at a page that answers 200 would
+  // otherwise pass the probe.
+  it('fails the deploy on a redirect instead of following it', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(302, { Location: '/elsewhere' });
+      res.end();
+    });
+    open.push(server);
+    await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+
+    const { status: exitCode, output } = await run(`http://127.0.0.1:${address.port}`);
+
+    expect(exitCode).not.toBe(0);
+    expect(output).toContain('it refused the request');
+  });
+
   it('only warns when the crawler does not answer', async () => {
     const { status, output } = await run(SILENT);
 
