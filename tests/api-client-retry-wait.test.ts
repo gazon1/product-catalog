@@ -134,7 +134,10 @@ describe('the retry waits before it asks again', () => {
   it('does not shorten a wait that exceeds the retry budget', async () => {
     // Укоротить чужой момент до бюджета — это повтор раньше разрешённого, то же
     // нарушение, только тише. Такой ответ отдаётся как есть, без второй попытки.
-    for (const header of [String(RETRY_AFTER_MAX_MS / 1000 + 1), '600']) {
+    // Обе формы проходят через одно решение, поэтому проверяются обе: дата за
+    // бюджетом — тот же случай, что и число секунд за бюджетом.
+    const dateBeyondBudget = new Date(Date.now() + RETRY_AFTER_MAX_MS * 10).toUTCString();
+    for (const header of [String(RETRY_AFTER_MAX_MS / 1000 + 1), '600', dateBeyondBudget]) {
       harness.waits.length = 0;
       const attempts = stubAttempts(
         () =>
@@ -297,7 +300,7 @@ describe('the answer’s moment is read in both forms HTTP allows', () => {
   });
 
   it('reads the rfc850 two-digit year the way HTTP does, not the way Date.parse does', () => {
-    // 69 в 2026 — это 2069: год, оказавшийся больше чем на 50 лет в будущем,
+    // 69 в 2026 — это 2069: момент, оказавшийся больше чем на 50 лет в будущем,
     // означает ближайший прошлый год с теми же цифрами. `Date.parse` сказал бы
     // 1969, и клиент повторил бы немедленно вместо ожидания.
     const in2026 = Date.parse('Wed, 21 Oct 2026 12:00:00 GMT');
@@ -309,6 +312,19 @@ describe('the answer’s moment is read in both forms HTTP allows', () => {
     );
     // А год, который в будущем не оказался, читается как есть.
     expect(retryAfterMs('Sunday, 06-Nov-94 08:49:37 GMT', in2026)).toBe(0);
+  });
+
+  it('applies the 50-year rule to the moment, not to the year number', () => {
+    // `06 Nov 2076` — это ровно «2026 + 50» по номеру года, но от `21 Oct 2026`
+    // до него больше 50 лет, и HTTP велит читать его как 1976, то есть «можно
+    // уже». Сравнение по номеру года оставило бы 2076 и ждало полвека.
+    const oct2026 = Date.parse('Wed, 21 Oct 2026 12:00:00 GMT');
+
+    expect(retryAfterMs('Friday, 06-Nov-76 08:49:37 GMT', oct2026)).toBe(0);
+    // А до ноября 2075 — меньше 50 лет, и он остаётся будущим.
+    expect(retryAfterMs('Tuesday, 06-Nov-75 08:49:37 GMT', oct2026)).toBe(
+      Date.parse('Nov 06, 2075 08:49:37 GMT') - oct2026,
+    );
   });
 
   it('rejects weekday names HTTP does not define', () => {

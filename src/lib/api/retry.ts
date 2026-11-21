@@ -132,16 +132,28 @@ const HTTP_DATE = new RegExp(
 const RFC_850 = new RegExp(`^(?:${LONG_DAYS}), (\\d{2})-([A-Za-z]{3})-(\\d{2}) (\\d{2}:\\d{2}:\\d{2}) GMT$`);
 
 /**
- * Какой век называет двузначный год rfc850.
+ * Момент, который называет rfc850 с двузначным годом.
  *
- * `Date.parse` считает `69` годом 1969 — но HTTP предписывает другое: год,
+ * `Date.parse` считает `69` годом 1969 — но HTTP предписывает другое: момент,
  * оказавшийся больше чем на 50 лет в будущем, означает ближайший прошлый год с
  * теми же двумя цифрами. Иначе `06-Nov-69` — это 2069, а не 1969, то есть
- * просьба подождать 43 года вместо мгновенного повтора.
+ * просьба подождать 43 года.
+ *
+ * Граница считается по моменту, а не по номеру года: `06 Nov 2076` при
+ * сегодняшнем `21 Oct 2026` уже за ней, хотя год 2076 — это ровно «2026 + 50».
  */
-function rfc850Year(yy: number, currentYear: number): number {
-  const candidate = currentYear - (currentYear % 100) + yy;
-  return candidate > currentYear + 50 ? candidate - 100 : candidate;
+function rfc850At(day: string, month: string, yy: string, time: string, now: number): number {
+  const year = new Date(now).getUTCFullYear();
+  // Месяц словом, а не числом: `06-Nov-2076` без него читается как локальное
+  // время и съезжает на часовой пояс.
+  const at = new Date(Date.parse(`${month} ${day}, ${year - (year % 100) + Number(yy)} ${time} GMT`));
+  const fiftyYearsOn = new Date(now);
+  fiftyYearsOn.setUTCFullYear(fiftyYearsOn.getUTCFullYear() + 50);
+
+  // Век назад — календарно, а не минус константа: в веке то 24, то 25
+  // високосных лет, и фиксированное число миллисекунд съехало бы на день.
+  if (at.getTime() > fiftyYearsOn.getTime()) at.setUTCFullYear(at.getUTCFullYear() - 100);
+  return at.getTime();
 }
 
 /**
@@ -176,11 +188,9 @@ export function retryAfterMs(header: string | null, now = Date.now()): number | 
   // читает по своему правилу, а не по правилу HTTP.
   const rfc850 = RFC_850.exec(text);
   if (rfc850) {
-    const [, day, month, yy, time] = rfc850;
-    const year = rfc850Year(Number(yy), new Date(now).getUTCFullYear());
-    // Тот же порядок, что и `Date.parse`: месяц словом, потому что `06-Nov-2069`
-    // без него читается как локальное время и съезжает на часовой пояс.
-    const at = Date.parse(`${month} ${day}, ${year} ${time} GMT`);
+    // Группы есть по построению выражения: оно матчится только целиком.
+    const [day, month, yy, time] = rfc850.slice(1) as [string, string, string, string];
+    const at = rfc850At(day, month, yy, time, now);
     return Number.isFinite(at) ? Math.max(0, at - now) : null;
   }
 
