@@ -14,6 +14,7 @@ tests/api-client-params.test.ts	15
 tests/api-client-response.test.ts	13
 tests/api-client-retry-wait.test.ts	9
 tests/api-client-retry.test.ts	7
+tests/api-client-secret.test.ts	6
 tests/api-client-transport.test.ts	17
 tests/api-contract.test.ts	2
 tests/architecture/freshness-wiring.test.ts	21

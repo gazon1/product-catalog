@@ -171,10 +171,13 @@ describe('nothing in the repository manages the crawler’s lifecycle', () => {
   });
 
   // У витрины нет базы, поэтому credential'а базы на её диске быть не должно:
-  // деплой вычищает его из .env вместе с остальным.
+  // деплой вычищает его из .env вместе с остальным. libpq пишет пароль в
+  // переменные PG*, поэтому и они должны вычищаться — иначе ключ базы
+  // остался бы на диске под другим именем.
   it('the deploy workflow leaves no database credential on the server', () => {
     const workflow = read('.github/workflows/deploy.yml');
     expect(workflow).toMatch(/DATABASE_URL/);
     expect(workflow).toMatch(/POSTGRES_/);
+    expect(workflow).toMatch(/PG\[A-Z_\]/);
   });
 });

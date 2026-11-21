@@ -52,21 +52,9 @@ die()  { printf '\033[0;31m  ❌ %s\033[0m\n' "$1" >&2; exit 1; }
 
 # The catalog's address and key: the environment first, the `.env` file
 # second. The file is where they live in production too — one place, two
-# environments.
-read_env() {
-    local name="$1"
-    local value="${!name:-}"
-    if [ -z "$value" ] && [ -f "$ROOT/.env" ]; then
-        value="$(grep -E "^${name}=" "$ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
-    fi
-    # The deploy writes single-quoted values (compose reads those literally, so
-    # a `$` in the key is not rewritten on the way in). The quotes are not part
-    # of the value.
-    case "$value" in
-        \'*\') value="${value:1:${#value}-2}" ;;
-    esac
-    printf '%s' "$value"
-}
+# environments. The rule lives in scripts/read-env.sh, because `just dev`
+# reads the same two values and must read them the same way.
+source "$ROOT/scripts/read-env.sh"
 
 # What identifies the storefront in /proc/<pid>/cmdline. `npm run dev` never
 # says "next" — see stack-down.sh for what went wrong when it did.

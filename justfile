@@ -17,11 +17,26 @@ default:
 # ==============================================================================
 # Local development
 # ==============================================================================
+# The storefront on the host, in dev mode, against a crawler that somebody else
+# runs. The crawler and its database are not ours: they live in the crawler
+# repository and are started from there.
+#
+# The address and the key come from the environment or from `.env` — the same
+# two values production uses. A key that contains a `$` is written in single
+# quotes, and the quotes are not part of the value: the same reader that
+# `stack-up` uses reads them here, so both recipes talk to the catalog with
+# the same key.
 [doc('Run next dev on :3000 against a crawler that is already running')]
 dev:
-    CRAWLER_API_URL=$(grep -E '^CRAWLER_API_URL=' .env 2>/dev/null | cut -d= -f2- || echo http://localhost:8080) \
-    CRAWLER_API_KEY=$(grep -E '^CRAWLER_API_KEY=' .env 2>/dev/null | cut -d= -f2- || echo local-dev-catalog-key) \
-        npm run dev
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/read-env.sh
+    api_url="$(read_env CRAWLER_API_URL)"
+    api_key="$(read_env CRAWLER_API_KEY)"
+    [ -n "$api_url" ] || { echo "error: CRAWLER_API_URL is not set. Put it in .env (see .env.example)." >&2; exit 1; }
+    [ -n "$api_key" ] || { echo "error: CRAWLER_API_KEY is not set. Put it in .env (see .env.example)." >&2; exit 1; }
+    export CRAWLER_API_URL="$api_url" CRAWLER_API_KEY="$api_key"
+    npm run dev
 
 # The storefront, on the host, against a crawler that somebody else runs. The
 # crawler and its database are not ours: they live in the crawler repository and
