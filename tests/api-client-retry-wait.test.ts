@@ -342,6 +342,39 @@ describe('the answer’s moment is read in both forms HTTP allows', () => {
     }
   });
 
+  it('rejects times the calendar does not have', () => {
+    // `Date.UTC` нормализует и время: `25:00` становится следующим днём, `07:60`
+    // — восемью часами. Принять это значило бы ждать момент, который сервер не
+    // называл.
+    for (const header of [
+      'Wed, 21 Oct 2015 25:00:00 GMT',
+      'Wed, 21 Oct 2015 07:60:00 GMT',
+      'Wed, 21 Oct 2015 07:28:60 GMT',
+      'Sunday, 06-Nov-94 25:49:37 GMT',
+      'Sun Nov  6 24:49:37 1994',
+      'Sun Nov  6 08:49:60 1994',
+    ]) {
+      expect(retryAfterMs(header, now)).toBeNull();
+    }
+  });
+
+  it('reads a moment in GMT whatever timezone the process runs in', () => {
+    // asctime не несёт пояса, и регрессия здесь — вернуться к `Date.parse`,
+    // который читает его в поясе машины. На UTC-машине такой тест прошёл бы,
+    // поэтому пояс переключается здесь же.
+    const gmt = Date.parse('Sun, 06 Nov 1994 08:49:37 GMT');
+    const saved = process.env.TZ;
+    try {
+      for (const zone of ['UTC', 'Europe/Moscow', 'America/New_York']) {
+        process.env.TZ = zone;
+        expect(retryAfterMs('Sun Nov  6 08:49:37 1994', gmt - 1_000)).toBe(1_000);
+      }
+    } finally {
+      if (saved === undefined) delete process.env.TZ;
+      else process.env.TZ = saved;
+    }
+  });
+
   it('rejects weekday names HTTP does not define', () => {
     // `Date.parse` принимает и `Foo, 06 Nov 1994 …` — форма заголовка этого не
     // делает, и мусор остаётся мусором.

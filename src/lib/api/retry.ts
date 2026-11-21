@@ -131,8 +131,8 @@ const RFC_850 = new RegExp(`^(?:${LONG_DAYS}), (\\d{2})-([A-Za-z]{3})-(\\d{2}) (
  * Собирается сам, а не через `Date.parse` строки, по двум причинам. asctime не
  * несёт часового пояса, и `Date.parse` читает его как локальное время — на
  * машине в UTC+3 это три часа в сторону, то есть повтор раньше разрешённого.
- * А `Date.parse` нормализует несуществующие даты (`31 Feb` становится 3 марта)
- * вместо того, чтобы их отвергнуть.
+ * А `Date.parse` нормализует несуществующие даты (`31 Feb` становится 3 марта,
+ * `07:60` — восемью часами) вместо того, чтобы их отвергнуть.
  */
 function httpDateAt(
   day: string,
@@ -145,10 +145,19 @@ function httpDateAt(
   const monthIndex = MONTHS.indexOf(month);
   if (monthIndex < 0) return null;
 
-  const at = new Date(Date.UTC(year, monthIndex, Number(day), Number(hour), Number(minute), Number(second)));
+  const components = [Number(day), Number(hour), Number(minute), Number(second)];
+  const at = new Date(Date.UTC(year, monthIndex, ...components));
   // Компоненты, которые календарь не вместил, вернулись бы другими: `31 Feb`
-  // стал бы 3 марта, и клиент ждал бы не тот момент.
-  if (at.getUTCMonth() !== monthIndex || at.getUTCDate() !== Number(day)) return null;
+  // стал бы 3 марта, а `25:00` — следующим днём, и клиент ждал бы не тот
+  // момент. Поэтому каждый компонент сверяется с тем, что вернулось.
+  const same = [
+    at.getUTCDate(),
+    at.getUTCHours(),
+    at.getUTCMinutes(),
+    at.getUTCSeconds(),
+  ];
+  if (components.some((value, index) => value !== same[index])) return null;
+  if (at.getUTCMonth() !== monthIndex) return null;
   return at.getTime();
 }
 
