@@ -356,10 +356,10 @@ jobs:
       # Runs from the runner through the public domain, so it also proves Caddy,
       # TLS and the network path are healthy — not just the container.
       #
-      # Two questions, two endpoints, two outcomes. `/api/health` is liveness: it
-      # must answer 200, otherwise the deployment did not produce a live site.
-      # `/api/ready` is the parser dependency: a failure here is reported as a
-      # dependency problem that needs its own look, not as a dead storefront.
+      # The logic lives in `scripts/smoke-test.sh` so that its policy is executed
+      # by tests rather than matched by a regex against this file: liveness
+      # (`/api/health`) fails the deploy, readiness (`/api/ready`) is reported as
+      # a dependency warning.
       - name: Smoke test
         env:
           SMOKE_URL: ${{ vars.PUBLIC_URL }}
@@ -368,31 +368,10 @@ jobs:
             echo "::error::Repository variable PUBLIC_URL is not set."
             exit 1
           fi
-          alive=no
-          for i in $(seq 1 10); do
-            if curl -fsS --max-time 15 "$SMOKE_URL/api/health" | grep -q '"ok":true'; then
-              echo "✅ Storefront process alive after ${i} attempt(s)"
-              alive=yes
-              break
-            fi
-            echo "Attempt $i: not alive yet, retrying in 15s"
-            sleep 15
-          done
-          if [ "$alive" != yes ]; then
-            echo "::error::Storefront process did not become alive after 10 attempts"
-            echo "Rollback: cd \$APP_DIR && export TAG=<prev-sha> && docker compose up -d"
-            exit 1
+          if [ ! -x ./scripts/smoke-test.sh ]; then
+            chmod +x ./scripts/smoke-test.sh
           fi
-
-          # A ready catalog is not what liveness promised. When it is not ready,
-          # say so as a dependency outage — the image is deployed and running.
-          if status="$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' "$SMOKE_URL/api/ready")" \
-             && [ "$status" = "200" ]; then
-            echo "✅ Catalog dependency ready"
-          else
-            echo "::warning::The storefront is alive but the catalog dependency is not ready (/api/ready answered ${status:-no answer})."
-            echo "::warning::This is a parser/NetBird problem, not a storefront process failure; the deployed image stays running."
-          fi
+          ./scripts/smoke-test.sh
 
       - name: Summary
         if: always()

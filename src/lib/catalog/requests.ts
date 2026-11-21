@@ -169,6 +169,30 @@ export async function getSiteStats(): Promise<SiteStats> {
 }
 
 /**
+ * Почему каталог не готов — словами, которые можно показывать наружу.
+ *
+ * `/api/ready` открыт публично, а текст ошибки клиента пишется для журнала: в
+ * нём адрес краулера, путь и идентификатор запроса. Оператору же нужно
+ * различать «лежит», «не отвечает вовремя», «ключ не подошёл» и «не настроено»,
+ * а не читать внутренний адрес. Поэтому наружу уходит класс отказа, а полный
+ * текст остаётся в журнале.
+ */
+function readinessReason(err: unknown): string {
+  if (!(err instanceof ApiError)) return 'unknown';
+  if (err.status === 401 || err.status === 403) return 'unauthorized';
+  if (err.status === 0) return err.timedOut ? 'timeout' : 'unreachable';
+  if (err.status === 503) return 'not-ready';
+  return 'error';
+}
+
+/** Ответ проверки готовности: класс отказа, а не текст ошибки. */
+export interface Readiness {
+  ok: boolean;
+  /** Почему нет — классом, без внутренних деталей. `null`, когда готов. */
+  detail: string | null;
+}
+
+/**
  * Готов ли каталог к отдаче?
  *
  * Ответ приходит из собственной проверки готовности краулера, которая проверяет,
@@ -183,7 +207,7 @@ export async function getSiteStats(): Promise<SiteStats> {
  *
  * Это никогда не бросает: проверка, которая бросает, уводит процесс за собой.
  */
-export async function ping(): Promise<{ ok: boolean; detail: string | null }> {
+export async function ping(): Promise<Readiness> {
   try {
     // Из `apiGet` есть только выход через `2xx`, значит добраться до `return`
     // — значит проверка готовности ответила 200.
@@ -193,10 +217,10 @@ export async function ping(): Promise<{ ok: boolean; detail: string | null }> {
     });
     return { ok: true, detail: null };
   } catch (err) {
-    // Сообщение уже обрезано клиентом; сам объект ошибки не логируется, потому
-    // что `cause` — не наше дело за него ручаться.
+    // Полный текст — в журнал: он для того, кто разбирает отказ. Наружу уходит
+    // только класс отказа, потому что этот эндпоинт открыт публично.
     const detail = err instanceof Error ? err.message : 'unknown error';
     console.error('[api] the catalog is not ready:', detail);
-    return { ok: false, detail };
+    return { ok: false, detail: readinessReason(err) };
   }
 }

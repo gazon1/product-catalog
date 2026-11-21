@@ -23,8 +23,11 @@ let cached: { ok: boolean; detail: string | null; at: number } | null = null;
  * Readiness: can the catalog be served?
  *
  * Returns 200 when the crawler's own readiness probe answers, and 503 when it
- * does not — with the reason in `detail`, because "the catalog is down" is not
- * an answer an operator can act on.
+ * does not — with the reason class in `detail` (`unreachable`, `timeout`,
+ * `unauthorized`, `not-ready`, `error`), because "the catalog is down" is not an
+ * answer an operator can act on. The class, not the error text: this endpoint is
+ * publicly reachable, and the client's message names the crawler's address, the
+ * path and the request id. The full message stays in the container log.
  *
  * This is a dependency check, not liveness: a process that serves this 503 is
  * still running, and `/api/health` says so. Keeping the two apart is what stops

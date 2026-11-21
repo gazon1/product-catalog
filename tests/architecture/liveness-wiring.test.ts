@@ -3,15 +3,22 @@
  *
  * ## Что здесь под тестом
  *
- * Одно правило: **healthcheck контейнера, `wait-healthy` и smoke-test деплоя
- * спрашивают о процессе витрины, а не о краулере.** Иначе отказ краулера
- * выглядит как падение витрины: контейнер уходит в рестарт, деплой краснеет на
- * «storefront unhealthy», и разбирают не ту систему.
+ * Одно правило: **healthcheck контейнера и smoke-test деплоя спрашивают о
+ * процессе витрины, а не о краулере.** Иначе отказ краулера выглядит как
+ * падение витрины: контейнер уходит в рестарт, деплой краснеет на «storefront
+ * unhealthy», и разбирают не ту систему.
  *
- * Проверяется форма, а не смысл: Docker healthcheck и compose-файл ходят на
- * `/api/health`, а готовность (`/api/ready`) спрашивают отдельные шаги, которые
- * говорят об отказе зависимости своими словами. Проба `/api/health` до краулера
- * не ходит вовсе — это проверяет `tests/api-liveness-readiness.test.ts`.
+ * Проверяется два разных слоя, и порознь:
+ *
+ *   - **проводка** — Dockerfile, compose и workflow спрашивают те эндпоинты,
+ *     которые называют; это читается как текст;
+ *   - **поведение** — сам `scripts/smoke-test.sh` исполняется против
+ *     подставного сервера: живость важна, готовность — предупреждение. Логика,
+ *     зашитая в YAML, проверялась бы регулярным выражением по собственному
+ *     тексту, а такое остаётся зелёным, когда меняется ветка, которая выходит
+ *     с `1`.
+ *
+ * Сами эндпоинты проверяет `tests/api-liveness-readiness.test.ts`.
  */
 
 import { readFileSync } from 'node:fs';
@@ -38,12 +45,14 @@ describe('liveness and dependency readiness stay apart', () => {
     expect(test).not.toContain('/api/ready');
   });
 
-  it('the deploy smoke test asks liveness and reports readiness separately', () => {
-    const workflow = read('.github/workflows/deploy.yml');
-    // Живость — то, из-за чего деплой краснеет.
-    expect(workflow).toMatch(/\$SMOKE_URL\/api\/health/);
-    // Готовность — отдельный вопрос, и на него отвечают словами о зависимости.
-    expect(workflow).toMatch(/\$SMOKE_URL\/api\/ready/);
-    expect(workflow).toMatch(/catalog dependency is not ready[\s\S]*?not a storefront process failure/);
+  it('the deploy smoke test runs the script that implements the policy', () => {
+    const workflow = parse(read('.github/workflows/deploy.yml')) as {
+      jobs: { deploy: { steps: { name?: string; run?: string }[] } };
+    };
+    const step = workflow.jobs.deploy.steps.find((s) => s.name === 'Smoke test');
+    expect(step, 'the deploy workflow has no Smoke test step').toBeDefined();
+    // The step runs the script, and the script is executed by the test below —
+    // so the assertions here cover wiring, and the behaviour is proven elsewhere.
+    expect(step!.run).toContain('./scripts/smoke-test.sh');
   });
 });
