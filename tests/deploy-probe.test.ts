@@ -51,6 +51,24 @@ async function serveStatus(status: number): Promise<string> {
 const SILENT = 'http://127.0.0.1:1';
 
 /**
+ * Сервер, который принимает соединение и не отвечает — «чёрная дыра».
+ *
+ * Отказ соединения и молчание маршрута — разные сбои: первый приходит сразу,
+ * второй не приходит никогда. Проба обязана быть ограничена по времени, иначе
+ * шаг деплоя висит до таймаута job'а.
+ */
+async function serveBlackhole(): Promise<string> {
+  const server = createServer(() => {
+    // Deliberately never answers.
+  });
+  open.push(server);
+  await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('no port');
+  return `http://127.0.0.1:${address.port}`;
+}
+
+/**
  * Исполнить скрипт, подменив `docker exec <container> node -e <code>` на
  * локальный `node -e <code>`.
  *
@@ -60,7 +78,10 @@ const SILENT = 'http://127.0.0.1:1';
  * Не `spawnSync`: он блокирует поток, в котором живёт подставной сервер, — и
  * проба, ждущая ответа, упиралась бы в собственный таймаут.
  */
-async function run(url: string): Promise<{ status: number; output: string }> {
+async function run(
+  url: string,
+  extraEnv: Record<string, string> = {},
+): Promise<{ status: number; output: string }> {
   const dir = mkdtempSync(resolve(tmpdir(), 'probe-catalog-'));
   dirs.push(dir);
   writeFileSync(
@@ -81,6 +102,7 @@ async function run(url: string): Promise<{ status: number; output: string }> {
       PATH: `${dir}:${process.env.PATH ?? ''}`,
       CRAWLER_API_URL: url,
       CRAWLER_API_KEY: 'test-key',
+      ...extraEnv,
     },
   });
 
@@ -132,5 +154,19 @@ describe('the container-side catalog probe', () => {
 
     expect(status).toBe(0);
     expect(output).toContain('::warning::The storefront container cannot reach the catalog API right now');
+  });
+
+  // A route that swallowed the request would otherwise hang the deploy step
+  // until the job's own timeout — and read as a hung deployment, not an outage.
+  it('only warns, and returns, when the route blackholes the request', async () => {
+    const url = await serveBlackhole();
+    const started = Date.now();
+    const { status, output } = await run(url, { CRAWLER_PROBE_TIMEOUT_MS: '1500' });
+    const elapsed = Date.now() - started;
+
+    expect(status).toBe(0);
+    expect(output).toContain('::warning::The storefront container cannot reach the catalog API right now');
+    // Bounded by the probe's own deadline, not by the test's patience.
+    expect(elapsed).toBeLessThan(15_000);
   });
 });

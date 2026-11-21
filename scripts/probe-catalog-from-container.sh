@@ -28,12 +28,27 @@ set -euo pipefail
 
 container="${1:-product-catalog}"
 
+# A network that drops packets — a route that disappeared, a firewall that
+# swallowed the request — never refuses and never answers. The probe has to be
+# bounded, or the deploy step hangs until the job's own timeout: a blackholed
+# route would read as a hung deployment, not as the outage it is.
+probe_timeout_ms="${CRAWLER_PROBE_TIMEOUT_MS:-5000}"
+case "$probe_timeout_ms" in
+    '' | *[!0-9]*)
+        echo "CRAWLER_PROBE_TIMEOUT_MS must be a number of milliseconds, got '$probe_timeout_ms'" >&2
+        exit 1
+        ;;
+esac
+
 set +e
 docker exec "$container" node -e "
   const raw = process.env.CRAWLER_API_URL || '';
   const base = raw.endsWith('/') ? raw.slice(0, -1) : raw;
   const url = base.endsWith('/api/catalog/v1') ? base : base + '/api/catalog/v1';
-  fetch(url + '/ready', { headers: { 'X-Api-Key': process.env.CRAWLER_API_KEY || '' } })
+  fetch(url + '/ready', {
+    headers: { 'X-Api-Key': process.env.CRAWLER_API_KEY || '' },
+    signal: AbortSignal.timeout($probe_timeout_ms),
+  })
     .then((r) => {
       console.log('the catalog API answered', r.status);
       if (r.ok) process.exit(0);
