@@ -50,23 +50,33 @@ docker exec "$container" node -e "
     .then((r) => {
       console.log('the catalog API answered', r.status);
       if (r.ok) process.exit(0);
-      // A 4xx or a 3xx is what this deploy wrote being wrong — a key, an
-      // address, a path. Everything else (5xx, no answer) is the catalog not
-      // serving right now, and that is somebody else's downtime.
-      process.exit(r.status >= 300 && r.status < 500 ? 2 : 1);
+      // 3 = the deploy wrote a key or an address that cannot work. 4 = the
+      // catalog is there and is asking us to come back later (408, 429) — that
+      // is not something this deploy can fix, so it is an outage.
+      if ([408, 429].includes(r.status)) process.exit(4);
+      process.exit(r.status >= 300 && r.status < 500 ? 3 : 4);
     })
-    .catch((e) => { console.error('the catalog API is unreachable from the container:', e.message); process.exit(1); });
+    .catch((e) => { console.error('the catalog API is unreachable from the container:', e.message); process.exit(4); });
 "
 probe=$?
 set -e
 
-if [ "$probe" = 2 ]; then
+# The node code above exits 0 (answered), 3 (refused) or 4 (outage). Any other
+# status — 1, 125, 126, 127 — is docker itself failing: no such container, no
+# daemon, no node in the image. The probe did not run, so it proves nothing.
+if [ "$probe" != 0 ] && [ "$probe" != 3 ] && [ "$probe" != 4 ]; then
+    echo "::error::The container-side probe could not run at all (docker exec exited $probe)."
+    echo "::error::That is a broken deployment, not a crawler outage: check that the container '$container' exists and that its image has node."
+    exit 1
+fi
+
+if [ "$probe" = 3 ]; then
     echo "::error::The storefront container reached the catalog API and it refused the request (4xx/3xx)."
     echo "::error::That is a misconfiguration this deploy wrote, not an outage: check that CRAWLER_API_URL is the crawler's address in the NetBird network and that CRAWLER_API_KEY is the crawler's CATALOG_API_KEY."
     exit 1
 fi
 
-if [ "$probe" != 0 ]; then
+if [ "$probe" = 4 ]; then
     echo "::warning::The storefront container cannot reach the catalog API right now — parser/NetBird dependency unavailable."
     echo "::warning::The storefront process is deployed and alive; /api/ready reports this separately. The deploy is not re-run on somebody else's downtime."
 fi

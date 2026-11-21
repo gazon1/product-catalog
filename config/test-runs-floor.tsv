@@ -40,7 +40,7 @@ tests/contract/targets.test.ts	3
 tests/contract/top-deals.test.ts	2
 tests/dependabot-bump.test.ts	7
 tests/dependency-decision.test.ts	11
-tests/deploy-probe.test.ts	10
+tests/deploy-probe.test.ts	13
 tests/format.test.ts	12
 tests/freshness.test.ts	14
 tests/image-pin.test.ts	11

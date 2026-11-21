@@ -78,7 +78,10 @@ async function serveBlackhole(): Promise<string> {
  * Не `spawnSync`: он блокирует поток, в котором живёт подставной сервер, — и
  * проба, ждущая ответа, упиралась бы в собственный таймаут.
  */
-async function run(url: string): Promise<{ status: number; output: string }> {
+async function run(
+  url: string,
+  extraEnv: Record<string, string> = {},
+): Promise<{ status: number; output: string }> {
   const dir = mkdtempSync(resolve(tmpdir(), 'probe-catalog-'));
   dirs.push(dir);
   writeFileSync(
@@ -87,6 +90,10 @@ async function run(url: string): Promise<{ status: number; output: string }> {
       '#!/usr/bin/env bash',
       '# docker exec <container> node -e <code>  ->  node -e <code>',
       'shift 3            # exec, the container name, node',
+      'if [ -n "${DOCKER_FORCE_FAILURE:-}" ]; then',
+      '  echo "Error response from daemon: no such container" >&2',
+      "  exit 1",
+      'fi',
       'exec node "$@"',
       '',
     ].join('\n'),
@@ -99,6 +106,7 @@ async function run(url: string): Promise<{ status: number; output: string }> {
       PATH: `${dir}:${process.env.PATH ?? ''}`,
       CRAWLER_API_URL: url,
       CRAWLER_API_KEY: 'test-key',
+      ...extraEnv,
     },
   });
 
@@ -125,6 +133,28 @@ describe('the container-side catalog probe', () => {
 
     expect(exitCode).not.toBe(0);
     expect(output).toContain('it refused the request');
+  });
+
+  // 408 and 429 are the catalog asking us to come back later, not a key or an
+  // address this deploy can fix.
+  it.each([408, 429])('only warns when the crawler answers %i', async (status) => {
+    const url = await serveStatus(status);
+    const { status: exitCode, output } = await run(url);
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain('::warning::');
+    expect(output).not.toContain('it refused the request');
+  });
+
+  // The probe proves something only if it ran: a docker failure is a broken
+  // deployment, not a crawler outage.
+  it('fails the deploy when the probe cannot run at all', async () => {
+    const { status: exitCode, output } = await run('http://127.0.0.1:1', {
+      DOCKER_FORCE_FAILURE: '1',
+    });
+
+    expect(exitCode).not.toBe(0);
+    expect(output).toContain('could not run at all');
   });
 
   // A redirect means the address is not the catalog API. `fetch` would follow
