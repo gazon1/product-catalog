@@ -59,6 +59,12 @@ read_env() {
     if [ -z "$value" ] && [ -f "$ROOT/.env" ]; then
         value="$(grep -E "^${name}=" "$ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
     fi
+    # The deploy writes single-quoted values (compose reads those literally, so
+    # a `$` in the key is not rewritten on the way in). The quotes are not part
+    # of the value.
+    case "$value" in
+        \'*\') value="${value:1:${#value}-2}" ;;
+    esac
     printf '%s' "$value"
 }
 

@@ -129,10 +129,12 @@ jobs:
       # a value in the compose file and not as a line in the repository.
       #
       # The compose file names the variables it passes explicitly, and compose
-      # interpolates `${...}` in the values it passes — so a key with a `$` in
-      # it would be rewritten on the way in. The file is written by the deploy
-      # instead, and the key comes from a secret, so it is in neither the
-      # repository nor the workflow's log.
+      # reads the server's .env file to fill them in — and compose interpolates
+      # `${...}` inside a .env value, so an unquoted key with a `$` in it would
+      # be rewritten on the way in. The values are therefore written
+      # single-quoted: compose reads a single-quoted value literally. The key
+      # comes from a secret, so it is in neither the repository nor the
+      # workflow's log.
       #
       # The address is a repository variable, not a constant: the crawler
       # publishes no host port and is not deployed with the storefront — it is
@@ -170,6 +172,32 @@ jobs:
             echo "::error::Set it in Settings → Secrets and variables → Actions → Variables."
             exit 1
           fi
+
+          # A value that cannot be written into the .env file is refused here,
+          # loudly, instead of being written and misread later: a single quote
+          # would end the quoted value, a newline would end the line.
+          for value in "$CRAWLER_API_URL" "$CRAWLER_API_KEY" "$PUBLIC_URL"; do
+            case "$value" in
+              *"'"*)
+                echo "::error::The catalog address, the catalog key or the public URL contains a single quote, which cannot be written into the server's .env file."
+                exit 1
+                ;;
+              *$'\n'*)
+                echo "::error::The catalog address, the catalog key or the public URL contains a newline, which cannot be written into the server's .env file."
+                exit 1
+                ;;
+            esac
+          done
+
+          # The three values travel base64-encoded. The encoded text is
+          # [A-Za-z0-9+/=] only, so nothing in it can be read as shell syntax
+          # when the remote script is parsed, and it is decoded only there — a
+          # key that contains `$(...)` or a backtick stays a value instead of
+          # becoming a command on the server.
+          b64_url=$(printf '%s' "$CRAWLER_API_URL" | base64 -w0)
+          b64_key=$(printf '%s' "$CRAWLER_API_KEY" | base64 -w0)
+          b64_public=$(printf '%s' "$PUBLIC_URL" | base64 -w0)
+
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<EOF
           set -euo pipefail
           cd "$APP_DIR"
@@ -186,13 +214,15 @@ jobs:
             echo ""
             echo "# The catalog's address and key, written by the deploy workflow."
             echo "# The key never lives in the repository, and this file is not in git."
-            echo "CRAWLER_API_URL=$CRAWLER_API_URL"
-            echo "CRAWLER_API_KEY=$CRAWLER_API_KEY"
+            # Single quotes: compose reads a single-quoted value literally, so a
+            # '$' in the key is not rewritten on the way into the container.
+            printf "CRAWLER_API_URL='%s'\n" "\$(printf '%s' '$b64_url' | base64 -d)"
+            printf "CRAWLER_API_KEY='%s'\n" "\$(printf '%s' '$b64_key' | base64 -d)"
             echo ""
             echo "# The site's own address, written here so that the sitemap, the"
             echo "# robots.txt and the canonical tags name the address that is"
             echo "# actually served. One variable, one address."
-            echo "NEXT_PUBLIC_SITE_URL=$PUBLIC_URL"
+            printf "NEXT_PUBLIC_SITE_URL='%s'\n" "\$(printf '%s' '$b64_public' | base64 -d)"
           } >> .env.new
           mv .env.new .env
           chmod 600 .env
@@ -207,10 +237,17 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
+          # Encoded for the same reason as the key above: the remote script is
+          # parsed as shell, so nothing is expanded into it that could be read
+          # as shell.
+          b64_tag=$(printf '%s' "$TAG" | base64 -w0)
+          b64_dir=$(printf '%s' "$APP_DIR" | base64 -w0)
+
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<EOF
           set -euo pipefail
-          cd "$APP_DIR"
-          export TAG="$TAG"
+          app_dir="\$(printf '%s' '$b64_dir' | base64 -d)"
+          cd "\$app_dir"
+          export TAG="\$(printf '%s' '$b64_tag' | base64 -d)"
 
           # The compose file lives in this directory, so it must match the
           # commit being deployed. `pull --ff-only` refuses to merge or rebase,
@@ -221,7 +258,7 @@ jobs:
             git pull --ff-only
             echo "Deploy checkout is now at \$(git rev-parse --short HEAD) on \$(git rev-parse --abbrev-ref HEAD)"
           else
-            echo "::warning::$APP_DIR is not a git checkout — deploying the files as they are on disk."
+            echo "::warning::\$app_dir is not a git checkout — deploying the files as they are on disk."
           fi
 
           # Git preserves the exec bit only for files it tracks as executable.
