@@ -118,4 +118,19 @@ describe('the deploy smoke test fails on liveness and warns on readiness', () =>
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}${result.stderr}`).toContain('SMOKE_URL must be set');
   });
+
+  it.each(['SMOKE_ATTEMPTS=0', 'SMOKE_ATTEMPTS=abc', 'SMOKE_DELAY=abc'])(
+    'refuses a meaningless retry setting (%s) instead of failing obscurely',
+    (setting) => {
+      const [name, value] = setting.split('=');
+      const url = 'http://127.0.0.1:1';
+      const result = spawnSync('bash', [SCRIPT], {
+        encoding: 'utf8',
+        env: { ...process.env, SMOKE_URL: url, [name!]: value! },
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}${result.stderr}`).toContain(`${name} must be`);
+    },
+  );
 });

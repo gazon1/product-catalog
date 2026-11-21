@@ -18,16 +18,31 @@
 #     storefront is deployed and running, and a parser/NetBird outage must not
 #     read as a storefront process failure.
 #
-# Env overrides (the defaults are what the deploy uses):
-#   SMOKE_ATTEMPTS  liveness attempts            (default 10)
-#   SMOKE_DELAY     seconds between attempts     (default 15)
-#   SMOKE_URL       the site's public address    (required)
+# The retry policy. The defaults are what the deploy uses; the suite overrides
+# them so a failing case does not spend 150 seconds proving it, so both are
+# validated rather than left to produce a confusing shell error.
+#   SMOKE_ATTEMPTS  liveness attempts  (default 10)
+#   SMOKE_DELAY     seconds between    (default 15, may be 0 for the suite)
 
 set -euo pipefail
 
 : "${SMOKE_URL:?SMOKE_URL must be set to the public address of the site}"
+
 attempts="${SMOKE_ATTEMPTS:-10}"
 delay="${SMOKE_DELAY:-15}"
+
+case "$attempts" in
+    '' | *[!0-9]* | 0)
+        echo "SMOKE_ATTEMPTS must be a positive whole number, got '$attempts'" >&2
+        exit 1
+        ;;
+esac
+case "$delay" in
+    '' | *[!0-9]*)
+        echo "SMOKE_DELAY must be a whole number of seconds, got '$delay'" >&2
+        exit 1
+        ;;
+esac
 
 alive=no
 for i in $(seq 1 "$attempts"); do

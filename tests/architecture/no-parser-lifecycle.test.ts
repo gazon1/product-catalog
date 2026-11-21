@@ -192,6 +192,28 @@ describe('nothing in the repository manages the crawler’s lifecycle', () => {
     expect(workflow).toMatch(/CRAWLER_API_KEY='%s'/);
   });
 
+  // Тот же запрет — для любого секрета, не только для ключа: `secrets.X`,
+  // подставленный прямо в текст удалённого скрипта, — это значение, которое
+  // сервер прочтёт как shell. Путь деплоя теперь едет base64, как и ключ, а не
+  // интерполируется в heredoc.
+  it('the deploy workflow expands no secret into a remote script', () => {
+    // `env: SECRET: ${{ secrets.X }}` is fine — GitHub substitutes it before
+    // the shell sees the step. What must not happen is a secret inside `run:`,
+    // which is the script a remote server parses as shell.
+    const workflow = parse(read('.github/workflows/deploy.yml')) as {
+      jobs: Record<string, { steps: { name?: string; run?: unknown }[] }>;
+    };
+    const offenders: string[] = [];
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of job.steps ?? []) {
+        if (typeof step.run === 'string' && /\$\{\{\s*secrets\./.test(step.run)) {
+          offenders.push(step.name ?? '<unnamed step>');
+        }
+      }
+    }
+    expect(offenders, offenders.join(', ')).toEqual([]);
+  });
+
   // У витрины нет базы, поэтому credential'а базы на её диске быть не должно:
   // деплой вычищает его из .env вместе с остальным. libpq пишет пароль в
   // переменные PG*, поэтому и они должны вычищаться — иначе ключ базы

@@ -119,7 +119,7 @@ async function run(url: string): Promise<{ status: number; output: string }> {
 describe('the container-side catalog probe', () => {
   // A refusal is this deploy's own misconfiguration, whatever the status: a
   // wrong key (401/403) and a wrong address (404) are the same operator action.
-  it.each([401, 403, 404])('fails the deploy when the crawler answers %i', async (status) => {
+  it.each([400, 401, 403, 404, 405])('fails the deploy when the crawler answers %i', async (status) => {
     const url = await serveStatus(status);
     const { status: exitCode, output } = await run(url);
 

@@ -14,8 +14,8 @@
 #
 # TWO FAILURES, TWO OUTCOMES (issue #146)
 #
-#   refused  — the catalog answered 401/403/404. The address or the key this
-#              deploy wrote cannot work. That fails the deploy.
+#   refused  — the catalog answered 4xx or redirected (3xx). The address, the
+#              key or the path this deploy wrote cannot work. Fails the deploy.
 #   silent   — the catalog did not answer, or answered 5xx. A parser/NetBird
 #              outage. The storefront is deployed and alive (`/api/health`
 #              proves it), so this only warns: a deploy that reddens on somebody
@@ -50,9 +50,10 @@ docker exec "$container" node -e "
     .then((r) => {
       console.log('the catalog API answered', r.status);
       if (r.ok) process.exit(0);
-      // 401/403/404 and a 3xx are the same class: what this deploy wrote is
-      // not the catalog API. Everything else is the catalog not serving now.
-      process.exit([401, 403, 404].includes(r.status) || (r.status >= 300 && r.status < 400) ? 2 : 1);
+      // A 4xx or a 3xx is what this deploy wrote being wrong — a key, an
+      // address, a path. Everything else (5xx, no answer) is the catalog not
+      // serving right now, and that is somebody else's downtime.
+      process.exit(r.status >= 300 && r.status < 500 ? 2 : 1);
     })
     .catch((e) => { console.error('the catalog API is unreachable from the container:', e.message); process.exit(1); });
 "
@@ -60,7 +61,7 @@ probe=$?
 set -e
 
 if [ "$probe" = 2 ]; then
-    echo "::error::The storefront container reached the catalog API and it refused the request (401/403/404)."
+    echo "::error::The storefront container reached the catalog API and it refused the request (4xx/3xx)."
     echo "::error::That is a misconfiguration this deploy wrote, not an outage: check that CRAWLER_API_URL is the crawler's address in the NetBird network and that CRAWLER_API_KEY is the crawler's CATALOG_API_KEY."
     exit 1
 fi

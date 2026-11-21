@@ -314,10 +314,16 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
+          APP_DIR: ${{ secrets.VPS_APP_DIR }}
         run: |
-          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<'EOF'
+          # Encoded for the same reason as the catalog key above: the remote
+          # script is parsed as shell, and a secret interpolated into it would be
+          # a command if it carried a `$(...)`.
+          b64_dir=$(printf '%s' "$APP_DIR" | base64 -w0)
+
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<EOF
           set -euo pipefail
-          cd "${{ secrets.VPS_APP_DIR }}"
+          cd "\$(printf '%s' '$b64_dir' | base64 -d)"
 
           if [ ! -x ./scripts/probe-catalog-from-container.sh ]; then
             chmod +x ./scripts/probe-catalog-from-container.sh
