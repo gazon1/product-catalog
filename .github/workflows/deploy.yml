@@ -340,6 +340,15 @@ jobs:
             echo "::error::The catalog key is in the storefront's build output. It must never reach the browser."
             exit 1
           fi
+
+          # The name of the variable must not be in the browser's chunks either:
+          # it is there only when a client component pulled the server module
+          # that reads the key. The image build refuses such a bundle too — this
+          # check sees the bundle that was actually deployed.
+          if docker exec product-catalog sh -c 'grep -rlF "CRAWLER_API_KEY" /app/.next/static/chunks 2>/dev/null' | grep -q .; then
+            echo "::error::A client bundle of the storefront reads CRAWLER_API_KEY. The key is a server-side secret."
+            exit 1
+          fi
           echo "the catalog API is reachable from the container, and the key is not in the bundle"
           EOF
 

@@ -39,6 +39,16 @@ RUN ls public/ > /dev/null 2>&1 || mkdir public
 # arg for them.
 RUN npm run build
 
+# The key is a server-side secret, and a browser chunk must not even mention
+# where it comes from: the name of the variable shows up in a client chunk
+# only when a client component pulled the server module that reads the key.
+# The check lives in the build, so it holds for every image — the CI one too —
+# and not only for the image that is deployed.
+RUN if grep -rlF 'CRAWLER_API_KEY' .next/static/chunks 2>/dev/null | grep -q .; then \
+      echo 'A client bundle reads CRAWLER_API_KEY. The key is a server-side secret.'; \
+      exit 1; \
+    fi
+
 # ── runner ───────────────────────────────────────────────────────────────────
 FROM node:${NODE_VERSION} AS runner
 WORKDIR /app
