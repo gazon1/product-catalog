@@ -288,15 +288,16 @@ describe('the answer’s moment is read in both forms HTTP allows', () => {
     expect(retryAfterMs(new Date(now + 90_000).toUTCString(), now)).toBe(90_000);
   });
 
-  it('reads all three forms HTTP defines', () => {
-    // IMF-fixdate, rfc850 и asctime — три формы, которые называет HTTP.
-    for (const header of [
-      'Sun, 06 Nov 1994 08:49:37 GMT',
-      'Sunday, 06-Nov-94 08:49:37 GMT',
-      'Sun Nov  6 08:49:37 1994',
-    ]) {
-      expect(retryAfterMs(header, Date.parse(header) - 1_000)).toBe(1_000);
-    }
+  it('reads all three forms HTTP defines, and reads them in GMT', () => {
+    // IMF-fixdate, rfc850 и asctime — три формы, которые называет HTTP. Ожидание
+    // задано явным GMT, а не `Date.parse(header)`: у asctime нет пояса, и
+    // `Date.parse` читает его в поясе машины — тест, который повторил бы это,
+    // скрыл бы сдвиг вместо того, чтобы его поймать.
+    const gmt = Date.parse('Sun, 06 Nov 1994 08:49:37 GMT');
+
+    expect(retryAfterMs('Sun, 06 Nov 1994 08:49:37 GMT', gmt - 1_000)).toBe(1_000);
+    expect(retryAfterMs('Sunday, 06-Nov-94 08:49:37 GMT', gmt - 1_000)).toBe(1_000);
+    expect(retryAfterMs('Sun Nov  6 08:49:37 1994', gmt - 1_000)).toBe(1_000);
   });
 
   it('reads the rfc850 two-digit year the way HTTP does, not the way Date.parse does', () => {
@@ -325,6 +326,20 @@ describe('the answer’s moment is read in both forms HTTP allows', () => {
     expect(retryAfterMs('Tuesday, 06-Nov-75 08:49:37 GMT', oct2026)).toBe(
       Date.parse('Nov 06, 2075 08:49:37 GMT') - oct2026,
     );
+  });
+
+  it('rejects dates the calendar does not have', () => {
+    // `Date.parse` нормализует их вместо отказа: `31 Feb` становится 3 марта, и
+    // клиент ждал бы не тот момент, который назвал сервер.
+    for (const header of [
+      'Wed, 31 Feb 2027 08:00:00 GMT',
+      'Wed, 32 Jan 2027 08:00:00 GMT',
+      'Wed, 00 Mar 2027 08:00:00 GMT',
+      'Sunday, 31-Feb-94 08:49:37 GMT',
+      'Sun Feb 31 08:49:37 1994',
+    ]) {
+      expect(retryAfterMs(header, now)).toBeNull();
+    }
   });
 
   it('rejects weekday names HTTP does not define', () => {

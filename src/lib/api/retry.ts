@@ -113,23 +113,44 @@ const DELAY_SECONDS = /^\d+$/;
 const SHORT_DAYS = 'Sun|Mon|Tue|Wed|Thu|Fri|Sat';
 const LONG_DAYS = 'Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday';
 
-/**
- * Две формы HTTP-date с четырёхзначным годом: IMF-fixdate и asctime.
- *
- * `Date.parse` куда снисходительнее: `1 Jan 2027`, `2027-01-01` и `Foo, 06 Nov
- * 1994 …` — для него даты, для HTTP — нет. Принять их значило бы превратить
- * мусорный заголовок в настоящее ожидание, поэтому форма названа здесь явно.
- * Третья форма, rfc850, разбирается отдельно: у неё двузначный год.
- */
-const HTTP_DATE = new RegExp(
-  `^(?:` +
-    `(?:${SHORT_DAYS}), \\d{2} [A-Za-z]{3} \\d{4} \\d{2}:\\d{2}:\\d{2} GMT` +
-    `|(?:${SHORT_DAYS}) [A-Za-z]{3} [ \\d]\\d \\d{2}:\\d{2}:\\d{2} \\d{4}` +
-    `)$`,
-);
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** IMF-fixdate: `Wed, 21 Oct 2015 07:28:05 GMT`. Группы: день, месяц, год, чч, мм, сс. */
+const IMF_FIXDATE = new RegExp(`^(?:${SHORT_DAYS}), (\\d{2}) ([A-Za-z]{3}) (\\d{4}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$`);
+
+/** asctime: `Sun Nov  6 08:49:37 1994`. Группы: месяц, день, чч, мм, сс, год. */
+const ASCTIME = new RegExp(`^(?:${SHORT_DAYS}) ([A-Za-z]{3}) ([ \\d]\\d) (\\d{2}):(\\d{2}):(\\d{2}) (\\d{4})$`);
 
 /** rfc850: `Sunday, 06-Nov-94 08:49:37 GMT`. */
-const RFC_850 = new RegExp(`^(?:${LONG_DAYS}), (\\d{2})-([A-Za-z]{3})-(\\d{2}) (\\d{2}:\\d{2}:\\d{2}) GMT$`);
+const RFC_850 = new RegExp(`^(?:${LONG_DAYS}), (\\d{2})-([A-Za-z]{3})-(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$`);
+
+/**
+ * Момент в GMT, который называют эти компоненты, либо `null`, если такого
+ * момента в календаре нет.
+ *
+ * Собирается сам, а не через `Date.parse` строки, по двум причинам. asctime не
+ * несёт часового пояса, и `Date.parse` читает его как локальное время — на
+ * машине в UTC+3 это три часа в сторону, то есть повтор раньше разрешённого.
+ * А `Date.parse` нормализует несуществующие даты (`31 Feb` становится 3 марта)
+ * вместо того, чтобы их отвергнуть.
+ */
+function httpDateAt(
+  day: string,
+  month: string,
+  year: number,
+  hour: string,
+  minute: string,
+  second: string,
+): number | null {
+  const monthIndex = MONTHS.indexOf(month);
+  if (monthIndex < 0) return null;
+
+  const at = new Date(Date.UTC(year, monthIndex, Number(day), Number(hour), Number(minute), Number(second)));
+  // Компоненты, которые календарь не вместил, вернулись бы другими: `31 Feb`
+  // стал бы 3 марта, и клиент ждал бы не тот момент.
+  if (at.getUTCMonth() !== monthIndex || at.getUTCDate() !== Number(day)) return null;
+  return at.getTime();
+}
 
 /**
  * Момент, который называет rfc850 с двузначным годом.
@@ -142,18 +163,28 @@ const RFC_850 = new RegExp(`^(?:${LONG_DAYS}), (\\d{2})-([A-Za-z]{3})-(\\d{2}) (
  * Граница считается по моменту, а не по номеру года: `06 Nov 2076` при
  * сегодняшнем `21 Oct 2026` уже за ней, хотя год 2076 — это ровно «2026 + 50».
  */
-function rfc850At(day: string, month: string, yy: string, time: string, now: number): number {
+function rfc850At(
+  day: string,
+  month: string,
+  yy: string,
+  hour: string,
+  minute: string,
+  second: string,
+  now: number,
+): number | null {
   const year = new Date(now).getUTCFullYear();
-  // Месяц словом, а не числом: `06-Nov-2076` без него читается как локальное
-  // время и съезжает на часовой пояс.
-  const at = new Date(Date.parse(`${month} ${day}, ${year - (year % 100) + Number(yy)} ${time} GMT`));
+  const at = httpDateAt(day, month, year - (year % 100) + Number(yy), hour, minute, second);
+  if (at === null) return null;
+
   const fiftyYearsOn = new Date(now);
   fiftyYearsOn.setUTCFullYear(fiftyYearsOn.getUTCFullYear() + 50);
+  if (at <= fiftyYearsOn.getTime()) return at;
 
   // Век назад — календарно, а не минус константа: в веке то 24, то 25
   // високосных лет, и фиксированное число миллисекунд съехало бы на день.
-  if (at.getTime() > fiftyYearsOn.getTime()) at.setUTCFullYear(at.getUTCFullYear() - 100);
-  return at.getTime();
+  const past = new Date(at);
+  past.setUTCFullYear(past.getUTCFullYear() - 100);
+  return past.getTime();
 }
 
 /**
@@ -184,22 +215,33 @@ export function retryAfterMs(header: string | null, now = Date.now()): number | 
   }
 
   // Буква в значении — повод проверить, HTTP-date ли это. Один `Date.parse` не
-  // годится: он принимает и то, что HTTP за дату не считает, а двузначный год
-  // читает по своему правилу, а не по правилу HTTP.
+  // годится: он принимает и то, что HTTP за дату не считает, двузначный год
+  // читает по своему правилу, а asctime — в поясе машины, а не в GMT.
   const rfc850 = RFC_850.exec(text);
   if (rfc850) {
-    // Группы есть по построению выражения: оно матчится только целиком.
-    const [day, month, yy, time] = rfc850.slice(1) as [string, string, string, string];
-    const at = rfc850At(day, month, yy, time, now);
-    return Number.isFinite(at) ? Math.max(0, at - now) : null;
+    const parts = rfc850.slice(1) as [string, string, string, string, string, string];
+    return since(rfc850At(...parts, now), now);
   }
 
-  if (!HTTP_DATE.test(text)) return null;
-  const at = Date.parse(text);
-  if (!Number.isFinite(at)) return null;
+  const fixdate = IMF_FIXDATE.exec(text);
+  if (fixdate) {
+    const [day, month, year, hour, minute, second] = fixdate.slice(1) as [string, string, string, string, string, string];
+    return since(httpDateAt(day, month, Number(year), hour, minute, second), now);
+  }
 
+  const asctime = ASCTIME.exec(text);
+  if (asctime) {
+    const [month, day, hour, minute, second, year] = asctime.slice(1) as [string, string, string, string, string, string];
+    return since(httpDateAt(day, month, Number(year), hour, minute, second), now);
+  }
+
+  return null;
+}
+
+/** Сколько осталось до момента; прошлый и несуществующий моменты — это `null` и `0`. */
+function since(at: number | null, now: number): number | null {
   // Момент в прошлом — это разрешение спросить сейчас, а не запрет навсегда.
-  return Math.max(0, at - now);
+  return at === null ? null : Math.max(0, at - now);
 }
 
 /**
