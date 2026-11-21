@@ -177,7 +177,7 @@ describe('the container-side catalog probe', () => {
 
   // A deadline this deploy cannot mean is this deploy's problem, not the
   // crawler's: it must not be reported as somebody else's outage.
-  it.each(['0', 'abc', '2147483648'])(
+  it.each(['0', 'abc', '2147483648', '18446744073709556616', '999999999999999999999999'])(
     'refuses a meaningless deadline (%s) instead of warning about an outage',
     async (value) => {
       const url = await serveStatus(200);

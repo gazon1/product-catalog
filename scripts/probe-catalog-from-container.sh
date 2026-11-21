@@ -44,11 +44,18 @@ esac
 # — both are this deploy's misconfiguration, and both would otherwise be
 # reported as an outage of somebody else's service.
 #
-# `10#` makes bash read the value as decimal: a leading zero would otherwise be
-# octal to bash. The value travels to node through the environment and is read
-# with Number() there — interpolating the string into the script would make
-# `0008` a syntax error and `010` the octal 8.
-if [ "$((10#$probe_timeout_ms))" -lt 1 ] || [ "$((10#$probe_timeout_ms))" -gt 2147483647 ]; then
+# The bound is checked on the digits themselves, not with shell arithmetic:
+# `$((…))` wraps silently past its own integer range, so a huge number would
+# pass the check. Leading zeros are stripped first — `10#` is what makes bash
+# read them as decimal, and the value never reaches bash arithmetic again.
+#
+# The value travels to node through the environment and is read with Number()
+# there: interpolating the string into the script would make `0008` a syntax
+# error and `010` the octal 8.
+digits="${probe_timeout_ms#"${probe_timeout_ms%%[!0]*}"}"
+if [ "${#digits}" -gt 10 ] ||
+   { [ "${#digits}" -eq 10 ] && [[ "$digits" > "2147483647" ]]; } ||
+   [ -z "${digits//0/}" ]; then
     echo "CRAWLER_PROBE_TIMEOUT_MS must be between 1 and 2147483647 ms, got '$probe_timeout_ms'" >&2
     exit 1
 fi
