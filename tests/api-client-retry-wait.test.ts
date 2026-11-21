@@ -25,6 +25,7 @@ import {
   sleeper,
   TIMEOUT_RETRY_BACKOFF_MS,
 } from '@/lib/api/client';
+import { retryAfterMs } from '@/lib/api/retry';
 import { notReady, ready, stubAttempts, useClientHarness } from './api-client-harness';
 
 const harness = useClientHarness();
@@ -54,34 +55,56 @@ describe('the retry waits before it asks again', () => {
         }),
       ready,
     );
-    // Половина вычисленного ожидания: задержка — доля ожидания, а не оно само.
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
     const body = await apiGet<{ ok: boolean }>('/items');
 
     expect(body.ok).toBe(true);
     expect(harness.waits).toHaveLength(1);
-    expect(harness.waits[0]).toBe(1_000);
-    expect(harness.waits[0]).toBeLessThanOrEqual(2_000);
+    // Названный момент — минимум: дрожание добавляет к нему, а не урезает его.
+    expect(harness.waits[0]).toBeGreaterThanOrEqual(2_000);
+    expect(harness.waits[0]).toBeLessThanOrEqual(2_000 + RETRY_AFTER_DEFAULT_MS);
   });
 
-  it('never waits exactly the amount it was told', async () => {
-    // Отказанные в один момент вызывающие иначе повторили бы строго в общем
-    // ритме и ударили по краулеру ещё одной волной.
+  it('never waits less than the answer asked for', async () => {
+    // Дрожание отказывает в общем ритме, но не разрешает спросить раньше, чем
+    // сервер назвал момент: это его слово о том, сколько длится отказ.
+    for (const random of [0, 0.999]) {
+      harness.waits.length = 0;
+      stubAttempts(
+        () =>
+          new Response(JSON.stringify({ error: 'not ready' }), {
+            status: 503,
+            headers: { 'Retry-After': '2' },
+          }),
+        ready,
+      );
+      vi.spyOn(Math, 'random').mockReturnValue(random);
+
+      await apiGet('/items');
+
+      expect(harness.waits[0]).toBeGreaterThanOrEqual(2_000);
+    }
+  });
+
+  it('waits for an HTTP-date the answer named', async () => {
+    // Вторая законная форма заголовка — абсолютный момент, а не секунды.
     stubAttempts(
       () =>
         new Response(JSON.stringify({ error: 'not ready' }), {
           status: 503,
-          headers: { 'Retry-After': '2' },
+          headers: { 'Retry-After': new Date(Date.now() + 5_000).toUTCString() },
         }),
       ready,
     );
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
-    await apiGet('/items');
+    const body = await apiGet<{ ok: boolean }>('/items');
 
-    expect(harness.waits[0]).not.toBe(2_000);
-    expect(harness.waits[0]).toBeGreaterThan(0);
+    expect(body.ok).toBe(true);
+    expect(harness.waits).toHaveLength(1);
+    // Метка времени округлена до секунды, поэтому минимум — чуть меньше пяти.
+    expect(harness.waits[0]).toBeGreaterThanOrEqual(4_000);
   });
 
   it('asks again only after the wait', async () => {
@@ -108,23 +131,42 @@ describe('the retry waits before it asks again', () => {
     expect(events).toEqual(['request 1', 'wait', 'request 2']);
   });
 
-  it('caps the wait the answer asked for', async () => {
-    // Вызывающий не должен висеть минуту из-за того, что сервер так сказал.
+  it('does not shorten a wait that exceeds the retry budget', async () => {
+    // Укоротить чужой момент до бюджета — это повтор раньше разрешённого, то же
+    // нарушение, только тише. Такой ответ отдаётся как есть, без второй попытки.
+    for (const header of [String(RETRY_AFTER_MAX_MS / 1000 + 1), '600']) {
+      harness.waits.length = 0;
+      const attempts = stubAttempts(
+        () =>
+          new Response(JSON.stringify({ error: 'not ready' }), {
+            status: 503,
+            headers: { 'Retry-After': header },
+          }),
+        ready,
+      );
+
+      await expect(apiGet('/items')).rejects.toMatchObject({ status: 503 });
+      expect(attempts()).toBe(1);
+      expect(harness.waits).toEqual([]);
+    }
+  });
+
+  it('waits exactly the budget when the answer asks for the whole of it', async () => {
+    // Граница: бюджет — это ещё не «сверх бюджета», и такой момент исполним.
     stubAttempts(
       () =>
         new Response(JSON.stringify({ error: 'not ready' }), {
           status: 503,
-          headers: { 'Retry-After': '600' },
+          headers: { 'Retry-After': String(RETRY_AFTER_MAX_MS / 1000) },
         }),
       ready,
     );
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    vi.spyOn(Math, 'random').mockReturnValue(0);
 
-    await apiGet('/items');
+    const body = await apiGet<{ ok: boolean }>('/items');
 
-    expect(harness.waits).toHaveLength(1);
-    expect(harness.waits[0]).toBeLessThanOrEqual(RETRY_AFTER_MAX_MS);
-    expect(harness.waits[0]).toBeGreaterThan(0);
+    expect(body.ok).toBe(true);
+    expect(harness.waits[0]).toBe(RETRY_AFTER_MAX_MS);
   });
 
   it('waits a little when the answer names no moment', async () => {
@@ -201,5 +243,45 @@ describe('the retry waits before it asks again', () => {
     // Шов — это шов, а не дыра: то, что использует работающий сайт, — таймер,
     // который ждёт.
     await expect(realWait(0)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Разбор заголовка: какие значения называют момент и сколько до него.
+ *
+ * Обе законные формы и всё, что момента не называет. Момент в прошлом —
+ * разрешение спросить сейчас, а не запрет: `0`, а не отказ от повтора.
+ */
+describe('the answer’s moment is read in both forms HTTP allows', () => {
+  const now = Date.parse('Wed, 21 Oct 2015 07:28:00 GMT');
+
+  it('reads delay-seconds', () => {
+    expect(retryAfterMs('2', now)).toBe(2_000);
+    expect(retryAfterMs('0', now)).toBe(0);
+    expect(retryAfterMs(' 120 ', now)).toBe(120_000);
+  });
+
+  it('reads an HTTP-date as the time left until it', () => {
+    expect(retryAfterMs('Wed, 21 Oct 2015 07:28:05 GMT', now)).toBe(5_000);
+    expect(retryAfterMs(new Date(now + 90_000).toUTCString(), now)).toBe(90_000);
+  });
+
+  it('reads a moment in the past as zero, not as no moment', () => {
+    // Сервер сказал «можно уже»: повтор немедленный, а не по умолчанию.
+    expect(retryAfterMs('Wed, 21 Oct 2015 07:27:00 GMT', now)).toBe(0);
+    expect(retryAfterMs('0', now)).toBe(0);
+  });
+
+  it('nameless values are nameless', () => {
+    for (const header of [null, '', '   ', '-5', '1.5', 'soon', 'next tuesday', '2s']) {
+      expect(retryAfterMs(header, now)).toBeNull();
+    }
+  });
+
+  it('does not bound the moment at the retry budget', () => {
+    // Бюджет — решение вызывающего, а не свойство значения: разбор обязан
+    // вернуть то, что сказал сервер, чтобы укорачивание было видно и запрещено.
+    expect(retryAfterMs(String(RETRY_AFTER_MAX_MS / 1000 + 1), now)).toBe(RETRY_AFTER_MAX_MS + 1_000);
+    expect(retryAfterMs('86400', now)).toBe(86_400_000);
   });
 });
