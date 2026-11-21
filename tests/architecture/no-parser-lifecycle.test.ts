@@ -220,12 +220,13 @@ describe('nothing in the repository manages the crawler’s lifecycle', () => {
         heredoc = null;
         continue;
       }
-      // Three forms do not reach the server's parser as a value:
+      // Two forms do not reach the server's parser as a value:
       //   `\\$VAR` — the server's own variable, escaped from the runner;
-      //   `'...$VAR...'` — single quotes, which the runner's shell leaves alone;
       //   `$b64…` — already inert by construction.
-      const expandable = line.replace(/'[^']*'/g, "''");
-      for (const use of expandable.match(/(?<!\\)\$\{?[A-Za-z_][A-Za-z0-9_]*/g) ?? []) {
+      //
+      // Single quotes are NOT exempt: inside an unquoted heredoc bash expands
+      // `'$VAR'` too, quotes included in the output.
+      for (const use of line.match(/(?<!\\)\$\{?[A-Za-z_][A-Za-z0-9_]*/g) ?? []) {
         if (!use.startsWith('$b64')) offenders.push(`line ${index + 1}: ${use}`);
       }
     }

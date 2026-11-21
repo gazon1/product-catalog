@@ -337,7 +337,10 @@ jobs:
           # The key is a server-side secret: it must not be in the bundle that
           # the browser downloads. The container is the place where the bundle
           # actually is, so the bundle is checked where it is.
-          if docker exec product-catalog sh -c 'grep -rlF "$CRAWLER_API_KEY" /app/.next /app/server.js 2>/dev/null' | grep -q .; then
+          # The key reaches the container's own environment, so the grep reads it
+          # there — `\$` keeps it the server's variable instead of expanding it
+          # into this script on the runner.
+          if docker exec product-catalog sh -c 'grep -rlF "\$CRAWLER_API_KEY" /app/.next /app/server.js 2>/dev/null' | grep -q .; then
             echo "::error::The catalog key is in the storefront's build output. It must never reach the browser."
             exit 1
           fi
