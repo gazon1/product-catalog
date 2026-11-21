@@ -197,10 +197,14 @@ jobs:
           b64_url=$(printf '%s' "$CRAWLER_API_URL" | base64 -w0)
           b64_key=$(printf '%s' "$CRAWLER_API_KEY" | base64 -w0)
           b64_public=$(printf '%s' "$PUBLIC_URL" | base64 -w0)
+          # The deploy directory travels the same way. It is a path, not a
+          # secret, but it comes from a secret, and a `$(...)` inside it would
+          # be a command on the server just the same.
+          b64_dir=$(printf '%s' "$APP_DIR" | base64 -w0)
 
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<EOF
           set -euo pipefail
-          cd "$APP_DIR"
+          cd "\$(printf '%s' '$b64_dir' | base64 -d)"
 
           # Decoded here, on the server: the encoded text is inert, the value
           # is not. A decode that fails stops the deploy — it does not write

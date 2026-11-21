@@ -196,22 +196,41 @@ describe('nothing in the repository manages the crawler’s lifecycle', () => {
   // подставленный прямо в текст удалённого скрипта, — это значение, которое
   // сервер прочтёт как shell. Путь деплоя теперь едет base64, как и ключ, а не
   // интерполируется в heredoc.
-  it('the deploy workflow expands no secret into a remote script', () => {
-    // `env: SECRET: ${{ secrets.X }}` is fine — GitHub substitutes it before
-    // the shell sees the step. What must not happen is a secret inside `run:`,
-    // which is the script a remote server parses as shell.
-    const workflow = parse(read('.github/workflows/deploy.yml')) as {
-      jobs: Record<string, { steps: { name?: string; run?: unknown }[] }>;
-    };
+  it('the deploy workflow expands no value into a remote script', () => {
+    // `env: SECRET: ${{ secrets.X }}` is fine — GitHub substitutes it before the
+    // shell sees the step. What must not happen is a value interpolated into a
+    // remote heredoc: the server parses that script as shell, so a `$(...)` or a
+    // quote inside a path becomes a command there.
+    //
+    // An unquoted `<<EOF` expands `$VAR` here, on the runner. A quoted `<<'EOF'`
+    // does not — its `$VAR` belongs to the server. Only the first form can carry
+    // a caller's value into the script, so only the first form is inspected.
+    const workflow = read('.github/workflows/deploy.yml').split('\n');
+
     const offenders: string[] = [];
-    for (const job of Object.values(workflow.jobs)) {
-      for (const step of job.steps ?? []) {
-        if (typeof step.run === 'string' && /\$\{\{\s*secrets\./.test(step.run)) {
-          offenders.push(step.name ?? '<unnamed step>');
-        }
+    let heredoc: { marker: string; line: number } | null = null;
+
+    for (const [index, line] of workflow.entries()) {
+      if (heredoc === null) {
+        const opened = /<<(?![\'"])[\s]*(\w+)/.exec(line);
+        if (opened) heredoc = { marker: opened[1]!, line: index + 1 };
+        continue;
+      }
+      if (line.trim() === heredoc.marker) {
+        heredoc = null;
+        continue;
+      }
+      // Three forms do not reach the server's parser as a value:
+      //   `\\$VAR` — the server's own variable, escaped from the runner;
+      //   `'...$VAR...'` — single quotes, which the runner's shell leaves alone;
+      //   `$b64…` — already inert by construction.
+      const expandable = line.replace(/'[^']*'/g, "''");
+      for (const use of expandable.match(/(?<!\\)\$\{?[A-Za-z_][A-Za-z0-9_]*/g) ?? []) {
+        if (!use.startsWith('$b64')) offenders.push(`line ${index + 1}: ${use}`);
       }
     }
-    expect(offenders, offenders.join(', ')).toEqual([]);
+
+    expect(offenders, `expanded into a remote script:\n${offenders.join('\n')}`).toEqual([]);
   });
 
   // У витрины нет базы, поэтому credential'а базы на её диске быть не должно:
