@@ -32,6 +32,7 @@ function card(overrides: Partial<ProductCard> = {}): ProductCard {
     seller: 'Seller',
     cashbackPercent: 12.5,
     cashbackRubles: 240,
+    feedbackPoints: 300,
     inStock: true,
     imageUrl: 'https://cdn.example.com/i.png',
     productUrl: 'https://www.wildberries.net/catalog/1/detail.aspx',
@@ -48,6 +49,7 @@ describe('the card as the page reads it', () => {
     expect(mapped.title).toBe('Чайник электрический');
     expect(mapped.priceKopecks).toBe(199990);
     expect(mapped.cashbackRubles).toBe(240);
+    expect(mapped.feedbackPoints).toBe(300);
     expect(mapped.productUrl).toBe('https://www.wildberries.net/catalog/1/detail.aspx');
   });
 

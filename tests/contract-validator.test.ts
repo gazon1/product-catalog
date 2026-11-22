@@ -43,6 +43,7 @@ describe('the validator the contract test relies on', () => {
       seller: 'Seller',
       cashbackPercent: 12.5,
       cashbackRubles: 240,
+      feedbackPoints: 300,
       inStock: true,
       imageUrl: 'https://cdn.example.com/i.png',
       productUrl: 'https://www.wildberries.net/catalog/1/detail.aspx',

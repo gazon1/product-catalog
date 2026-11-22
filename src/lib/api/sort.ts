@@ -26,6 +26,10 @@ export const SORT_ORDERS = [
   'PriceDesc',
   'CashbackPercentDesc',
   'CashbackPercentAsc',
+  'FeedbackPointsDesc',
+  'FeedbackPointsAsc',
+  'FeedbackPointsShareDesc',
+  'FeedbackPointsShareAsc',
   'TitleAsc',
   'TitleDesc',
 ] as const;

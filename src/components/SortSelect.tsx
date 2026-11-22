@@ -7,6 +7,10 @@ const LABELS: Record<SortOrder, string> = {
   PriceDesc: 'Цена: по убыванию',
   CashbackPercentDesc: 'Кэшбэк: по убыванию',
   CashbackPercentAsc: 'Кэшбэк: по возрастанию',
+  FeedbackPointsDesc: 'Баллы за отзыв: по убыванию',
+  FeedbackPointsAsc: 'Баллы за отзыв: по возрастанию',
+  FeedbackPointsShareDesc: 'Доля баллов: по убыванию',
+  FeedbackPointsShareAsc: 'Доля баллов: по возрастанию',
   TitleAsc: 'Название: А → Я',
   TitleDesc: 'Название: Я → А',
 };
