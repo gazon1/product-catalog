@@ -44,6 +44,7 @@ export function mapCard(card: ProductCard): ProductCard {
     seller: card.seller ?? null,
     cashbackPercent: card.cashbackPercent ?? null,
     cashbackRubles: card.cashbackRubles ?? null,
+    feedbackPoints: card.feedbackPoints ?? null,
     inStock: card.inStock ?? null,
     imageUrl: card.imageUrl ?? null,
     productUrl: card.productUrl,

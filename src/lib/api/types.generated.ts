@@ -37,7 +37,7 @@
  * document always produces this file, byte for byte.
  *
  * The document this file was generated from has the fingerprint
- * `9daf590c466f63b85328265c51ea4be15f7a33dd928ce41522592315e00a9e0a`.
+ * `5d623eaa051b69c2646fb35917d20de981b714f10a60efcb0dda384e2044989b`.
  */
 export interface paths {
     "/targets": {
@@ -280,6 +280,12 @@ export interface components {
              *     through unchanged. Dividing it by 100 again would be wrong.
              */
             cashbackRubles?: number | null;
+            /**
+             * @description The WB points the product pays for a review — «Баллы ВБ за отзыв».
+             *     A count of points, not a percentage and not money. Null when the
+             *     product carries no points.
+             */
+            feedbackPoints?: number | null;
             inStock?: boolean | null;
             /** Format: uri */
             imageUrl?: string | null;
@@ -517,10 +523,26 @@ export interface operations {
                 /** @description Only items currently in stock. */
                 inStock?: boolean;
                 /**
+                 * @description Only products whose **current** observation was made at or after this
+                 *     moment. An ISO-8601 timestamp with an offset (`2026-11-20T00:00:00Z`).
+                 *
+                 *     The bound is on the observation the list shows, not on the history
+                 *     behind it: a product observed today is in the answer even when it was
+                 *     also observed last week, and a product last observed last week is out
+                 *     even when it was observed before that.
+                 */
+                scrapedAfter?: string;
+                /**
                  * @description Sort order. Every order is total: rows with equal sort keys are
                  *     ordered by their id, so a page boundary never repeats or drops a row.
+                 *
+                 *     The `FeedbackPoints*` orders sort by the points as a count, and the
+                 *     `FeedbackPointsShare*` orders sort by the points as a share of the
+                 *     price the product is sold at (`COALESCE(salePrice, price)`). Products
+                 *     without points, or without a price to compare against, are ordered
+                 *     last.
                  */
-                sort?: "DateDesc" | "DateAsc" | "PriceAsc" | "PriceDesc" | "CashbackPercentDesc" | "CashbackPercentAsc" | "TitleAsc" | "TitleDesc";
+                sort?: "DateDesc" | "DateAsc" | "PriceAsc" | "PriceDesc" | "CashbackPercentDesc" | "CashbackPercentAsc" | "FeedbackPointsDesc" | "FeedbackPointsAsc" | "FeedbackPointsShareDesc" | "FeedbackPointsShareAsc" | "TitleAsc" | "TitleDesc";
                 /**
                  * @description Zero-based page index. A value outside the range is clamped into it
                  *     rather than rejected: a hostile page number is a mistake in a URL, and
@@ -764,7 +786,7 @@ export interface operations {
  * every change to it — a retyped field, a renamed property, and a comment
  * that changes what the contract says.
  */
-export const CONTRACT_DOCUMENT_SHA256 = '9daf590c466f63b85328265c51ea4be15f7a33dd928ce41522592315e00a9e0a';
+export const CONTRACT_DOCUMENT_SHA256 = '5d623eaa051b69c2646fb35917d20de981b714f10a60efcb0dda384e2044989b';
 
 /** The properties of `ProductCard`, as the contract describes them. */
 export const PRODUCT_CARD_FIELDS = [
@@ -778,6 +800,7 @@ export const PRODUCT_CARD_FIELDS = [
   { name: 'seller', type: 'string', nullable: true },
   { name: 'cashbackPercent', type: 'number', nullable: true },
   { name: 'cashbackRubles', type: 'number', nullable: true },
+  { name: 'feedbackPoints', type: 'integer', nullable: true },
   { name: 'inStock', type: 'boolean', nullable: true },
   { name: 'imageUrl', type: 'string', nullable: true },
   { name: 'productUrl', type: 'string', nullable: false },
