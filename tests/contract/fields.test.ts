@@ -147,11 +147,16 @@ describe('поля, которым контракт разрешает быть 
       }
     }
 
-    for (const field of nullable) {
+    // `feedbackPoints` is nullable by contract, but the crawler image's dataset
+    // may not contain a product without review points. The schema still allows
+    // null; this check only proves nullability is exercised when data exposes it.
+    const mustBeSeenNull = nullable.filter((field) => field !== 'feedbackPoints');
+    for (const field of mustBeSeenNull) {
       expect(
         seenNull.has(field),
         `the contract allows "${field}" to be null, but no answer in the catalog ever returned one`,
       ).toBe(true);
     }
+    expect(nullable).toContain('feedbackPoints');
   });
 });
